@@ -1,0 +1,11 @@
+{
+  "gameId": "CMA3X07D3773",
+  "engineVersion": "3.1259",
+  "genre": "voxel",
+  "template": "empty-3d",
+  "environment": "prod",
+  "agents": [
+    "claude-code"
+  ],
+  "agentsMdHash": "f4931f6f8d5e991fa80746f340a481bb942616ade3873970ec51e2a1317e17d7"
+}

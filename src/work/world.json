@@ -1,0 +1,43 @@
+{
+  "worldProfileData": {
+    "characterPoseVersion": 2,
+    "author": "Generated",
+    "playerSpawnPosition": {
+      "x": 0,
+      "y": 0.5,
+      "z": 4
+    },
+    "skyboxUrl": "",
+    "fogConfig": {
+      "enabled": true,
+      "color": "#4AA3FF",
+      "near": 50,
+      "far": 500
+    },
+    "worldSeed": 42,
+    "voxelBlockSize": 1,
+    "characterConfig": {
+      "height": 1.5,
+      "walkSpeed": 2,
+      "runSpeed": 5,
+      "fastRunSpeed": 8
+    },
+    "markers": [],
+    "terrain": {
+      "shape": "flat",
+      "groundBlockType": "grass"
+    },
+    "disableFoliage": true,
+    "groundWorldSizeX": 64,
+    "groundWorldSizeZ": 64,
+    "customBlockTypes": [],
+    "hud": {
+      "startScreen": {
+        "imageUrl": "https://forged-assets.bitmagic.cloud/images/c4f4f456-895b-44fe-a582-8a1f371e5f55/image.webp"
+      }
+    }
+  },
+  "assets": [],
+  "environmentObjects": [],
+  "gameId": "TKX4CHDMO0KN"
+}

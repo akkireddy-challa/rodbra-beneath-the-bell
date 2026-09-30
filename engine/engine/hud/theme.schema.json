@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitmagic.ai/schemas/hud-theme.json",
+  "title": "HUD Theme",
+  "description": "Visual theme applied to the in-game HUD. Defines colors, font, geometry, and decorative slots. See game/agent-docs/hud-theming.md for the agent-facing guide.",
+  "type": "object",
+  "required": ["name", "font", "colors", "shape"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Human-readable theme name. Shown in UIs; not used as an identifier."
+    },
+    "font":        { "$ref": "#/$defs/font" },
+    "colors":      { "$ref": "#/$defs/colors" },
+    "shape":       { "$ref": "#/$defs/shape" },
+    "decorations": { "$ref": "#/$defs/decorations" },
+    "elements": {
+      "type": "object",
+      "description": "Per-element overrides keyed by element id. Each value is a partial theme that takes precedence over the global tokens for that element only.",
+      "additionalProperties": { "$ref": "#/$defs/partialTheme" }
+    },
+    "icons": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Custom icon SVGs that replace the engine's built-in heart / mouse / arrow icons. Each value is inline SVG markup (≤16kb). SVGs may use currentColor or `__primary__`/`__danger__`/etc. tokens.",
+      "properties": {
+        "heart": { "type": "string", "maxLength": 16384, "description": "Health label icon. Defaults to a filled heart." },
+        "mouse": { "type": "string", "maxLength": 16384, "description": "Pointer-lock overlay icon. Defaults to an outlined mouse." },
+        "arrow": { "type": "string", "maxLength": 16384, "description": "Movement-key arrow used in the controls overlay. ONE SVG — CSS rotates it for down/left/right. Defaults to a thin chevron-arrow pointing up." }
+      }
+    }
+  },
+
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "description": "6-digit hex color, e.g. '#A0DAB9'."
+    },
+
+    "fontKey": {
+      "type": "string",
+      "enum": [
+        "red-hat-display",
+        "bebas-neue",
+        "press-start-2p",
+        "creepster",
+        "pacifico",
+        "space-grotesk",
+        "rubik-mono-one",
+        "vt323",
+        "orbitron",
+        "shrikhand",
+        "lilita-one",
+        "fredoka",
+        "grenze-gotisch",
+        "cinzel"
+      ],
+      "description": "Curated font key from the engine font catalog. Each key maps to exactly one Google Font; published games load only the active theme's font."
+    },
+
+    "font": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key":           { "$ref": "#/$defs/fontKey" },
+        "case":          { "enum": ["upper", "normal"], "default": "upper", "description": "Casing for label-voice text (buttons, headings, badges). Body copy is always sentence-case." },
+        "weightBody":    { "enum": [300, 400, 500, 700], "default": 400 },
+        "weightHeading": { "enum": [400, 500, 700, 900], "default": 700 },
+        "trackingLabel": { "type": "number", "minimum": 0, "maximum": 4, "default": 1.4, "description": "Letter-spacing in px for label-voice text. Higher = more spaced-out / branded feel." },
+        "outlineWidth":  { "type": "number", "minimum": 0, "maximum": 3, "default": 0, "description": "Text outline width in px for display-scale text (play button, counters, timers, toasts), drawn in colors.outline. Keep ≤2; 0 = no outline. Avoid on pixel fonts." },
+        "sizeScale":     { "type": "number", "minimum": 0.85, "maximum": 1.3, "description": "Relative text size multiplier applied to every themed font-size. Omit for no rescaling — useful for narrow faces with no weight axis." }
+      }
+    },
+
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "danger", "background", "surface", "text"],
+      "properties": {
+        "primary":    { "$ref": "#/$defs/hexColor", "description": "Accent color: progress fills, active states, primary highlights. Must have ≥3:1 contrast against background." },
+        "danger":     { "$ref": "#/$defs/hexColor", "description": "Damage flash, low-health, destructive emphasis." },
+        "warning":    { "$ref": "#/$defs/hexColor" },
+        "success":    { "$ref": "#/$defs/hexColor" },
+        "background": { "$ref": "#/$defs/hexColor", "description": "Outermost HUD surface (the recessed canvas under elements)." },
+        "surface":    { "$ref": "#/$defs/hexColor", "description": "Element fill (cards, bar tracks, button backgrounds)." },
+        "text":       { "$ref": "#/$defs/hexColor", "description": "Primary text on HUD surfaces. Must have ≥4.5:1 contrast against background." },
+        "textMuted":  { "$ref": "#/$defs/hexColor", "description": "Secondary / metadata text." },
+        "outline":    { "$ref": "#/$defs/hexColor", "description": "Outline color for shape.borderWidth borders and font.outlineWidth text strokes (chunky cartoon frames, gold trim). Omit if the theme has no outline concept." }
+      }
+    },
+
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "radiusPill":     { "type": "integer", "minimum": 0, "maximum": 500, "default": 500, "description": "Pill / button corner radius. 500 = full pill (Bitmagic default); 0 = sharp (retro/horror)." },
+        "radiusCard":     { "type": "integer", "minimum": 0, "maximum": 32, "default": 8 },
+        "glow":           { "enum": ["aqua", "pink", "warm", "horror-red", "gold", "cyan", "none"], "default": "aqua", "description": "Aura color for selected / active / celebratory states." },
+        "imageRendering": { "enum": ["auto", "pixelated"], "default": "auto", "description": "Set 'pixelated' for retro / 8-bit themes that use small bitmap decorations." },
+        "borderWidth":    { "type": "integer", "minimum": 0, "maximum": 6, "default": 0, "description": "Border width in px drawn in colors.outline around buttons, bars, counters, timers, toasts. Follows the theme radius (unlike border-image decorations). 0 = keep element defaults." },
+        "bevel":          { "type": "number", "minimum": 0, "maximum": 1, "default": 0, "description": "3D bevel strength: white-top/dark-bottom edge-light gradient over buttons and fills (cartoon/candy look). 0 = flat." },
+        "gloss":          { "type": "number", "minimum": 0, "maximum": 1, "default": 0, "description": "Specular sheen strength: a soft white highlight band across the upper face of buttons, chips and fills — 'glossy / shiny / candy'. Separate from bevel (edge light); raise both for moulded 3D plastic. 0 = matte." },
+        "glowColor":      { "$ref": "#/$defs/hexColor", "description": "Glow in an exact hue where the curated glow keys don't reach ('purple neon', a brand color). Wins over shape.glow when present, including over glow 'none'. Omit for the keyed glow." }
+      }
+    },
+
+    "decorationKey": {
+      "type": "string",
+      "enum": [
+        "drip-border",
+        "pixel-corners",
+        "scanline",
+        "vine-corner",
+        "glow-aura",
+        "bracket-frame",
+        "ribbon-edge",
+        "circuit-trace",
+        "candy-gloss",
+        "ornate-corner",
+        "royal-frame",
+        "hazard-stripes",
+        "pixel-frame",
+        "grain-texture"
+      ],
+      "description": "Curated decoration key. Each maps to an inline SVG shipped with the engine — zero per-game payload cost. Prefer these over custom SVGs."
+    },
+
+    "borderImageInline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["svg"],
+      "description": "Inline SVG used as a CSS border-image. Stretched or repeated along the element's border box.",
+      "properties": {
+        "svg":         { "type": "string", "maxLength": 16384, "description": "Inline SVG markup, ≤16kb. Use only when no curated decoration fits." },
+        "borderSlice": { "type": "integer", "minimum": 0, "maximum": 200, "default": 30, "description": "border-image-slice value: pixel offset that divides the SVG into 9-slice regions." },
+        "repeat":      { "enum": ["stretch", "repeat", "round", "space"], "default": "stretch", "description": "border-image-repeat value." }
+      }
+    },
+
+    "backgroundInline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["svg"],
+      "description": "Inline SVG used as a CSS background image. Sized, positioned, and tiled inside the element's content/pseudo-element box.",
+      "properties": {
+        "svg":      { "type": "string", "maxLength": 16384, "description": "Inline SVG markup, ≤16kb. Use only when no curated decoration fits." },
+        "size":     { "type": "string", "default": "auto", "pattern": "^(cover|contain|auto|\\d{1,4}(\\.\\d{1,2})?(px|%) \\d{1,4}(\\.\\d{1,2})?(px|%))$", "description": "background-size: cover | contain | auto, or an explicit tile size like \"32px 32px\". A REPEATING pattern needs the explicit form — these SVGs carry only a viewBox, so auto scales one copy over the whole element instead of tiling." },
+        "position": { "enum": ["top", "top-right", "right", "bottom-right", "bottom", "bottom-left", "left", "top-left", "center"], "default": "center", "description": "background-position value (9-anchor)." },
+        "repeat":   { "enum": ["no-repeat", "repeat", "repeat-x", "repeat-y"], "default": "no-repeat", "description": "background-repeat value." }
+      }
+    },
+
+    "borderImageValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/decorationKey" },
+        { "$ref": "#/$defs/borderImageInline" }
+      ],
+      "description": "Border-image decoration: curated key (preferred) or inline SVG with 9-slice controls."
+    },
+
+    "backgroundValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/decorationKey" },
+        { "$ref": "#/$defs/backgroundInline" }
+      ],
+      "description": "Background decoration: curated key (preferred) or inline SVG with size/position/repeat controls."
+    },
+
+    "decorationSlots": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "borderImage":      { "$ref": "#/$defs/borderImageValue", "description": "Applied as border-image around the element box." },
+        "backdrop":         { "$ref": "#/$defs/backgroundValue",  "description": "Applied as a background behind the element's content." },
+        "decorationBefore": { "$ref": "#/$defs/backgroundValue",  "description": "Renders via ::before — typically a flourish above/before the element." },
+        "decorationAfter":  { "$ref": "#/$defs/backgroundValue",  "description": "Renders via ::after — typically a flourish below/after the element (e.g. blood drips under a health bar)." }
+      }
+    },
+
+    "decorations": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Decoration slots keyed by HUD element class.",
+      "properties": {
+        "progressBar": { "$ref": "#/$defs/decorationSlots" },
+        "healthBar":   { "$ref": "#/$defs/decorationSlots" },
+        "counter":     { "$ref": "#/$defs/decorationSlots" },
+        "iconText":    { "$ref": "#/$defs/decorationSlots" },
+        "timer":       { "$ref": "#/$defs/decorationSlots" },
+        "toast":       { "$ref": "#/$defs/decorationSlots" },
+        "controls":    { "$ref": "#/$defs/decorationSlots" },
+        "reticle":     { "$ref": "#/$defs/decorationSlots" },
+        "mobileControls": { "$ref": "#/$defs/decorationSlots" }
+      }
+    },
+
+    "partialTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Subset of a theme used for per-element overrides. All fields optional; supplied values override the global theme for the matching element id.",
+      "properties": {
+        "font":        { "$ref": "#/$defs/font" },
+        "colors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary":    { "$ref": "#/$defs/hexColor" },
+            "danger":     { "$ref": "#/$defs/hexColor" },
+            "warning":    { "$ref": "#/$defs/hexColor" },
+            "success":    { "$ref": "#/$defs/hexColor" },
+            "background": { "$ref": "#/$defs/hexColor" },
+            "surface":    { "$ref": "#/$defs/hexColor" },
+            "text":       { "$ref": "#/$defs/hexColor" },
+            "textMuted":  { "$ref": "#/$defs/hexColor" },
+            "outline":    { "$ref": "#/$defs/hexColor" }
+          }
+        },
+        "shape":       { "$ref": "#/$defs/shape" },
+        "decorations": { "$ref": "#/$defs/decorationSlots" }
+      }
+    }
+  }
+}

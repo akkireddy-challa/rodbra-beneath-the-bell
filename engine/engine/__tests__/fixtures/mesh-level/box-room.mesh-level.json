@@ -1,0 +1,28 @@
+{
+  "format": "bitmagic-mesh-level",
+  "version": 1,
+  "units": "meters",
+  "colliders": [
+    { "name": "floor", "shape": "box", "position": [0, -0.25, 0], "size": [10, 0.5, 10] },
+    { "name": "wall_n", "shape": "box", "position": [0, 1.5, -5], "size": [10, 3, 0.3] },
+    { "name": "wall_s", "shape": "box", "position": [0, 1.5, 5], "size": [10, 3, 0.3] },
+    { "name": "wall_e", "shape": "box", "position": [5, 1.5, 0], "size": [0.3, 3, 10] },
+    { "name": "wall_w", "shape": "box", "position": [-5, 1.5, 0], "size": [0.3, 3, 10] },
+    { "name": "roof", "shape": "box", "position": [0, 3.15, 0], "size": [10, 0.3, 10] },
+    { "name": "crate", "shape": "box", "position": [3, 0.5, 3], "size": [1, 1, 1], "yaw": 0.6, "group": "environment" }
+  ],
+  "volumes": [
+    { "name": "room", "position": [0, 1.5, 0], "size": [10, 3, 10], "tags": ["pressure"] }
+  ],
+  "landmarks": [
+    { "name": "spawn", "position": [0, 0.2, 3], "yaw": 3.14159 },
+    { "name": "guard_1", "position": [-3, 0.2, -3], "tags": ["security"] },
+    { "name": "guard_2", "position": [3, 0.2, -3], "tags": ["security"] },
+    { "name": "exit", "position": [0, 0.2, -4], "yaw": 0 }
+  ],
+  "lights": [
+    { "name": "ceiling", "type": "point", "position": [0, 2.6, 0], "color": "#ffd09a", "intensity": 6, "distance": 14 },
+    { "name": "spot", "type": "spot", "position": [4, 2.8, 4], "target": [0, 0, 0], "color": "#9ddfff", "intensity": 12, "castShadow": true }
+  ],
+  "extras": { "fixture": "box-room" }
+}

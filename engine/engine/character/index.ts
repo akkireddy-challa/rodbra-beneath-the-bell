@@ -1,0 +1,11 @@
+export type { ICharacterContext } from 'engine/character/ICharacterContext.js';
+export { HibernationComponent } from 'engine/character/HibernationComponent.js';
+export type { HibernationCallbacks } from 'engine/character/HibernationComponent.js';
+export { NavigationComponent } from 'engine/character/NavigationComponent.js';
+export type { NavigationCallbacks, SpeedRampingConfig } from 'engine/character/NavigationComponent.js';
+export { HealthComponent } from 'engine/character/HealthComponent.js';
+export type { HealthCallbacks } from 'engine/character/HealthComponent.js';
+export { BlockExplosionComponent } from 'engine/character/BlockExplosionComponent.js';
+export type { ExplosionConfig, ExplosionCallbacks } from 'engine/character/BlockExplosionComponent.js';
+export { RagdollComponent, DEFAULT_RAGDOLL_CONFIG, buildHumanoidRagdollParts, buildAnimalRagdollParts, ragdollKnockback } from 'engine/character/RagdollComponent.js';
+export type { RagdollConfig, RagdollCallbacks, RagdollPartSpec } from 'engine/character/RagdollComponent.js';

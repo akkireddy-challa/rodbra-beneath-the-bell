@@ -33,21 +33,21 @@ Play the full browser game now: **[https://bitmagic.ai/play/CMA3X07D3773/](https
 
 ## 🎮 Controls
 
-| Action | Desktop (Keyboard & Mouse) | Gamepad | Mobile (Touch) |
+| Action | Desktop (Keyboard & Mouse) | Gamepad (Standard / Xbox / PS) | Mobile (Touch) |
 | :--- | :--- | :--- | :--- |
 | **Move** | `W` `A` `S` `D` | Left Stick | Virtual Joystick |
-| **Camera Orbit** | Mouse | Right Stick | Drag screen |
-| **Sprint** | `Shift` (Hold) | `L3` / Click Left Stick | Auto / Sprint Button |
-| **Light Attack** | Left Click | `X` / `Square` | Tap Attack |
-| **Charged Heavy Attack** | Right Click (Hold & Release) | `Y` / `Triangle` | Hold Attack |
-| **Dodge Roll (i-frames)** | `Space` | `B` / `Circle` | Roll Button |
-| **Directional Parry** | `Q` / `F` / Middle Click | `LB` / `L1` | `PARRY` |
-| **Throw Iron Ward** | `E` | `RB` / `R1` | `WARD` |
-| **Heal Flask** | `R` | `D-Pad Down` | `HEAL` |
-| **Rend Execution** | `X` (when 100% Rend) | `RT` / `R2` | `REND` |
-| **Target Lock-On** | `Tab` / `T` | `R3` / Click Right Stick | `LOCK` |
-| **Interact / Checkpoint** | `E` | `A` / `Cross` | Context Prompt |
-| **Pause / Settings** | `Escape` / `P` | `Start` / `Options` | `PAUSE` |
+| **Camera Orbit** | Mouse (Pointer Lock) | Right Stick | Drag screen |
+| **Sprint** | `Shift` (Hold) | `LT` / `L2` (Hold) | Sprint Button |
+| **Light Attack** | Left Click / `J` | `X` / `Square` | `ATTACK` Tap |
+| **Charged Heavy Attack** | Right Click (Hold) / `K` | `Y` / `Triangle` | `ATTACK` Hold & Release |
+| **Dodge Roll (i-frames)** | `Space` | `A` / `Cross` | `DODGE` Button |
+| **Directional Parry** | `F` / `Q` / Middle Click | `B` / `Circle` | `PARRY` Button |
+| **Throw Iron Ward** | `E` / `C` | `RB` / `R1` | `WARD` Button |
+| **Heal Flask** | `R` / `H` | `LB` / `L1` | `HEAL` Button |
+| **Rend Execution** | `X` (at 100% Rend) | `RT` / `R2` | `REND` Button |
+| **Target Lock-On** | `Tab` / `T` | `R3` / Click Right Stick | `LOCK` Button |
+| **Interact / Checkpoint** | `E` | `RT` / `R2` or Context | `INTERACT` Prompt |
+| **Pause / Unpause / Menu**| `Escape` / `P` | `Start` / `Options` / `Select` | `PAUSE` Button |
 
 ---
 
@@ -56,26 +56,32 @@ Play the full browser game now: **[https://bitmagic.ai/play/CMA3X07D3773/](https
 1. **Prologue — The Last Ring**: Snowy mountain pass, stone altar to draw the seax blade, and first roadside shrine.
 2. **Hushwood Approach**: Dense snowy pine forest draped in red ritual ribbons, hidden nail cache, and the Stave Chapel arena guarded by the Antler Chieftain.
 3. **The Red Mill**: Abandoned sawmill settlement on a frozen river, turning timber waterwheel, swinging pendulum blade timing hazard, and The Butcher of Vargdal arena.
-4. **Below the Bell**: Vaulted subterranean sanctuary, colossal cracked bronze bell with glowing fissure light, Elin's root altar, and the 3-phase Bell Mother encounter.
+4. **Below the Bell**: Vaulted subterranean sanctuary, colossal cracked bronze bell with glowing fissure light, Elin's root barrier altar, and the 3-phase Bell Mother encounter.
 5. **Epilogue & Dawn**: Player choice, dawn cinematics, subtitles, and ending credits.
 
 ---
 
-## 🛠️ Development
+## 🧪 Testing & Verification
 
-Built using the [Bitmagic Game Development Kit (GDK)](https://bitmagic.ai).
+Comprehensive automated regression tests and Bitmagic GDK headless browser verifications:
 
 ```bash
-# Start local development server (Game & Editor)
-bitmagic dev
+# Run unit & integration test suite (SaveGameService V2, resets, gating, upgrade math, input)
+pnpm test
 
-# Typecheck against engine API
+# Typecheck against Bitmagic engine API
 bitmagic check
 
-# Headless browser verification test
+# Headless browser verification test (Desktop)
 bitmagic verify
-bitmagic verify --platform mobile
 
-# Publish to bitmagic.ai
-bitmagic publish --visibility public
+# Headless browser verification test (Mobile viewport & touch parity)
+bitmagic verify --platform mobile
 ```
+
+### Verified Audit Repairs
+- **Finite Screen Transitions & New Game Reset**: New Game initiates a dedicated state reset, wipes stale saves, resets encounter spawns, teleports cleanly to prologue, and initializes audio.
+- **SaveGameService V2**: Versioned schema migrating legacy saves, tracking discovered checkpoints, consumed interactables, completed bosses, and shortcut gates.
+- **Modal Input & Pause Gating**: `Escape` closes open modals first, toggles pause/unpause without trapping keys, and reliably blocks combat inputs during pause/dialogs.
+- **Physical Collider Translations**: Shortcut gates (Hushwood and Mill) and Elin's Root Barrier translate their Rapier static rigid bodies dynamically so players cannot phase through them early and are properly allowed through when unlocked.
+- **Deterministic Checkpoint Resets**: Defeated bosses remain dead, common encounters respawn appropriately, and active projectiles/shockwaves are flushed cleanly on death/restart.

@@ -1009,12 +1009,7 @@ export class EnemyManager {
         return this.enemies.find(e => e.type === 'bell_mother' || e.type === 'butcher_boss') || null;
     }
 
-    public clearAll(): void {
-        for (const e of this.enemies) {
-            e.dispose();
-        }
-        this.enemies = [];
-
+    public clearProjectilesAndShockwaves(): void {
         for (const p of this.projectiles) {
             this.scene.remove(p.mesh);
         }
@@ -1024,5 +1019,14 @@ export class EnemyManager {
             sw.dispose(this.scene);
         }
         this.shockwaves = [];
+    }
+
+    public clearAll(): void {
+        for (const e of this.enemies) {
+            e.dispose();
+        }
+        this.enemies = [];
+
+        this.clearProjectilesAndShockwaves();
     }
 }

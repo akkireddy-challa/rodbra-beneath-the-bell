@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "node --test tests/audit_repairs.test.mjs"
   },
   "dependencies": {
     "@dimforge/rapier2d-compat": "^0.20.0",

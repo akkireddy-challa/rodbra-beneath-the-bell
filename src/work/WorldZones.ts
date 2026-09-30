@@ -4,6 +4,7 @@ import type { PhysicsWorld } from 'engine/physics/PhysicsWorld.js';
 import { audio } from './AudioSystem.js';
 import { type EnemyManager } from './Enemies.js';
 import { type PlayerStats } from './Constants.js';
+import type { SaveDataV2 } from './SaveGameService.js';
 
 export interface CheckpointInfo {
     id: string;
@@ -51,10 +52,14 @@ export class WorldZoneManager {
         { id: 'checkpoint_belowthebell', name: 'The Rooted Vault', position: new THREE.Vector3(0, 1.0, 225), zoneIndex: 3, discovered: false },
     ];
 
-    // Gates
+    // Gates & Barriers
     public hushwoodGateMesh: THREE.Object3D | null = null;
     public millGateMesh: THREE.Object3D | null = null;
     public sanctuaryGateMesh: THREE.Object3D | null = null;
+    public elinBarrierMesh: THREE.Object3D | null = null;
+    private hushwoodGateBody: any = null;
+    private millGateBody: any = null;
+    private elinBarrierBody: any = null;
 
     // Interactable objects
     public interactables: InteractiveItem[] = [];
@@ -120,8 +125,10 @@ export class WorldZoneManager {
             this.enemyManager.spawnEnemy('thrall', new THREE.Vector3(-4, 1.5, 75), 'hw_thrall_1');
             this.enemyManager.spawnEnemy('thrall', new THREE.Vector3(4, 1.5, 82), 'hw_thrall_2');
             this.enemyManager.spawnEnemy('warden', new THREE.Vector3(0, 1.5, 92), 'hw_warden_1');
-            // Antler Chieftain Miniboss in Chapel clearing
-            this.enemyManager.spawnEnemy('warden_miniboss', new THREE.Vector3(0, 1.5, 104), 'hw_boss');
+            // Antler Chieftain Miniboss in Chapel clearing (only if not defeated)
+            if (!this.stats.completedBosses.antlerMiniboss) {
+                this.enemyManager.spawnEnemy('warden_miniboss', new THREE.Vector3(0, 1.5, 104), 'hw_boss');
+            }
         }
 
         if (playerPos.z >= 120 && !this.spawnedZone2Enemies) {
@@ -130,8 +137,10 @@ export class WorldZoneManager {
             this.enemyManager.spawnEnemy('thrall', new THREE.Vector3(-5, 1.5, 148), 'mill_thrall_1');
             this.enemyManager.spawnEnemy('bellbound', new THREE.Vector3(5, 1.5, 155), 'mill_priestess');
             this.enemyManager.spawnEnemy('butcher', new THREE.Vector3(0, 1.5, 164), 'mill_butcher_guard');
-            // Named Boss: The Butcher of Vargdal in circular arena
-            this.enemyManager.spawnEnemy('butcher_boss', new THREE.Vector3(0, 1.5, 180), 'mill_boss');
+            // Named Boss: The Butcher of Vargdal in circular arena (only if not defeated)
+            if (!this.stats.completedBosses.millButcherBoss) {
+                this.enemyManager.spawnEnemy('butcher_boss', new THREE.Vector3(0, 1.5, 180), 'mill_boss');
+            }
         }
 
         if (playerPos.z >= 200 && !this.spawnedZone3Enemies) {
@@ -140,15 +149,16 @@ export class WorldZoneManager {
             this.enemyManager.spawnEnemy('bellbound', new THREE.Vector3(-6, 1.5, 230), 'crypt_priestess_1');
             this.enemyManager.spawnEnemy('bellbound', new THREE.Vector3(6, 1.5, 230), 'crypt_priestess_2');
             this.enemyManager.spawnEnemy('warden', new THREE.Vector3(0, 1.5, 238), 'crypt_warden');
-            // Final Boss: The Bell Mother
-            this.enemyManager.spawnEnemy('bell_mother', new THREE.Vector3(0, 1.5, 258), 'final_bell_mother');
+            // Final Boss: The Bell Mother (only if not defeated)
+            if (!this.stats.completedBosses.bellMotherBoss) {
+                this.enemyManager.spawnEnemy('bell_mother', new THREE.Vector3(0, 1.5, 258), 'final_bell_mother');
+            }
         }
 
-        // Checkpoint proximity discovery
+        // Checkpoint proximity discovery (tracking only, NO activeCheckpointId auto-assignment!)
         for (const cp of this.checkpoints) {
             if (!cp.discovered && playerPos.distanceTo(cp.position) <= 6.0) {
                 cp.discovered = true;
-                this.stats.activeCheckpointId = cp.id;
             }
         }
     }
@@ -158,6 +168,8 @@ export class WorldZoneManager {
         let bestItem: InteractiveItem | null = null;
         for (const item of this.interactables) {
             if (item.isConsumed) continue;
+            // Elin altar is only interactable after Bell Mother is slain
+            if (item.type === 'elin_altar' && !this.stats.completedBosses.bellMotherBoss) continue;
             const itemWorldPos = new THREE.Vector3(item.position.x, item.position.y + 1.0, item.position.z);
             const dist = playerPos.distanceTo(itemWorldPos);
             if (dist < bestDist) {
@@ -294,7 +306,7 @@ export class WorldZoneManager {
         hwGate.position.set(0, 3, 114);
         this.worldGroup.add(hwGate);
         this.hushwoodGateMesh = hwGate;
-        const gateCollider = this.createStaticBoxCollider(hwGate.position, new THREE.Vector3(3, 3, 0.3));
+        this.hushwoodGateBody = this.createStaticBoxCollider(hwGate.position, new THREE.Vector3(3, 3, 0.3));
 
         // ---------------------------------------------------------------------
         // ZONE 2: THE RED MILL (Sawmill & Frozen River)
@@ -364,7 +376,7 @@ export class WorldZoneManager {
         millGate.position.set(0, 3.5, 195);
         this.worldGroup.add(millGate);
         this.millGateMesh = millGate;
-        this.createStaticBoxCollider(millGate.position, new THREE.Vector3(3, 3.5, 0.4));
+        this.millGateBody = this.createStaticBoxCollider(millGate.position, new THREE.Vector3(3, 3.5, 0.4));
 
         // ---------------------------------------------------------------------
         // ZONE 3: BELOW THE BELL (Subterranean Crypt & Bell Sanctuary)
@@ -412,6 +424,20 @@ export class WorldZoneManager {
         pitBorder.rotation.x = Math.PI / 2;
         pitBorder.position.set(0, 0.3, 258);
         this.worldGroup.add(pitBorder);
+
+        // Root Barrier separating Bell Mother arena from Elin's altar (Z=263)
+        const barrierGroup = new THREE.Group();
+        barrierGroup.position.set(0, 2.5, 263);
+        const matRootBarrier = new THREE.MeshStandardMaterial({ color: 0x2A1C16, roughness: 0.95 });
+        for (let r = -6; r <= 6; r += 1.5) {
+            const rootPillar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 6, 6), matRootBarrier);
+            rootPillar.position.set(r, 0, (Math.abs(r) % 3 === 0 ? 0.3 : -0.3));
+            rootPillar.rotation.z = (r * 0.04);
+            barrierGroup.add(rootPillar);
+        }
+        this.worldGroup.add(barrierGroup);
+        this.elinBarrierMesh = barrierGroup;
+        this.elinBarrierBody = this.createStaticBoxCollider(new THREE.Vector3(0, 2.5, 263), new THREE.Vector3(7, 3, 0.5));
 
         // ELIN'S ALTAR: Sister bound to root-woven pedestal beneath bell
         const elinGroup = new THREE.Group();
@@ -523,6 +549,7 @@ export class WorldZoneManager {
                 this.stats.wardCharges = this.stats.wardMaxCharges;
                 this.stats.activeCheckpointId = id;
                 audio.playPrayerPostRest();
+                this.resetEncounterForCheckpoint(id, this.stats.completedBosses);
             }
         });
     }
@@ -611,15 +638,144 @@ export class WorldZoneManager {
 
     public openHushwoodGate(): void {
         if (this.hushwoodGateMesh) {
-            this.hushwoodGateMesh.position.y += 5.0; // Raise gate
+            this.hushwoodGateMesh.position.y = 9.0; // Raise gate
             audio.playArmorImpact();
         }
+        if (this.hushwoodGateBody?.rigidBody) {
+            try {
+                this.hushwoodGateBody.rigidBody.setTranslation({ x: 0, y: 100, z: 114 }, true);
+            } catch (_) {}
+        }
+        this.stats.unlockedShortcuts.hushwoodGate = true;
     }
 
     public openMillGate(): void {
         if (this.millGateMesh) {
-            this.millGateMesh.position.y += 6.0;
+            this.millGateMesh.position.y = 9.5;
             audio.playArmorImpact();
         }
+        if (this.millGateBody?.rigidBody) {
+            try {
+                this.millGateBody.rigidBody.setTranslation({ x: 0, y: 100, z: 195 }, true);
+            } catch (_) {}
+        }
+        this.stats.unlockedShortcuts.millGate = true;
+    }
+
+    public openElinBarrier(): void {
+        if (this.elinBarrierMesh) {
+            this.elinBarrierMesh.position.y = -6.0; // Sink roots into earth
+            audio.playBellToll('distant');
+        }
+        if (this.elinBarrierBody?.rigidBody) {
+            try {
+                this.elinBarrierBody.rigidBody.setTranslation({ x: 0, y: -100, z: 263 }, true);
+            } catch (_) {}
+        }
+    }
+
+    public resetEncounterForCheckpoint(checkpointId: string, completedBosses: Record<string, boolean>): void {
+        this.enemyManager.clearAll();
+
+        // Reset spawn triggers based on which checkpoint was restarted at
+        if (checkpointId === 'checkpoint_prologue') {
+            this.spawnedZone0Enemies = false;
+            this.spawnedZone1Enemies = false;
+            this.spawnedZone2Enemies = false;
+            this.spawnedZone3Enemies = false;
+        } else if (checkpointId === 'checkpoint_hushwood') {
+            this.spawnedZone0Enemies = true;
+            this.spawnedZone1Enemies = false;
+            this.spawnedZone2Enemies = false;
+            this.spawnedZone3Enemies = false;
+        } else if (checkpointId === 'checkpoint_redmill') {
+            this.spawnedZone0Enemies = true;
+            this.spawnedZone1Enemies = true;
+            this.spawnedZone2Enemies = false;
+            this.spawnedZone3Enemies = false;
+        } else if (checkpointId === 'checkpoint_belowthebell') {
+            this.spawnedZone0Enemies = true;
+            this.spawnedZone1Enemies = true;
+            this.spawnedZone2Enemies = true;
+            this.spawnedZone3Enemies = false;
+        }
+    }
+
+    public resetAll(): void {
+        this.spawnedZone0Enemies = false;
+        this.spawnedZone1Enemies = false;
+        this.spawnedZone2Enemies = false;
+        this.spawnedZone3Enemies = false;
+
+        for (const cp of this.checkpoints) {
+            cp.discovered = cp.id === 'checkpoint_prologue';
+        }
+
+        for (const item of this.interactables) {
+            item.isConsumed = false;
+            if (item.mesh) {
+                item.mesh.visible = true;
+                item.mesh.scale.set(1, 1, 1);
+            }
+        }
+
+        if (this.hushwoodGateMesh) this.hushwoodGateMesh.position.set(0, 3, 114);
+        if (this.hushwoodGateBody?.rigidBody) {
+            try { this.hushwoodGateBody.rigidBody.setTranslation({ x: 0, y: 3, z: 114 }, true); } catch (_) {}
+        }
+
+        if (this.millGateMesh) this.millGateMesh.position.set(0, 3.5, 195);
+        if (this.millGateBody?.rigidBody) {
+            try { this.millGateBody.rigidBody.setTranslation({ x: 0, y: 3.5, z: 195 }, true); } catch (_) {}
+        }
+
+        if (this.elinBarrierMesh) this.elinBarrierMesh.position.set(0, 2.5, 263);
+        if (this.elinBarrierBody?.rigidBody) {
+            try { this.elinBarrierBody.rigidBody.setTranslation({ x: 0, y: 2.5, z: 263 }, true); } catch (_) {}
+        }
+    }
+
+    public restoreFromSave(save: SaveDataV2): void {
+        for (const cp of this.checkpoints) {
+            cp.discovered = save.discoveredCheckpointIds.includes(cp.id) || cp.id === save.activeCheckpointId;
+        }
+
+        for (const item of this.interactables) {
+            if (save.consumedInteractableIds.includes(item.id)) {
+                item.isConsumed = true;
+                if (item.type === 'nail_cache' && item.mesh) {
+                    item.mesh.scale.set(0.8, 0.3, 0.8);
+                } else if (item.type === 'sword_pickup' && item.mesh) {
+                    item.mesh.visible = false;
+                }
+            }
+        }
+
+        if (save.unlockedShortcuts.hushwoodGate) {
+            this.openHushwoodGate();
+        }
+        if (save.unlockedShortcuts.millGate) {
+            this.openMillGate();
+        }
+        if (save.completedBosses.bellMotherBoss) {
+            this.openElinBarrier();
+        }
+
+        this.resetEncounterForCheckpoint(save.activeCheckpointId, save.completedBosses);
+    }
+
+    public getDiscoveredCheckpointIds(): string[] {
+        return this.checkpoints.filter(c => c.discovered).map(c => c.id);
+    }
+
+    public getConsumedInteractableIds(): string[] {
+        return this.interactables.filter(i => i.isConsumed).map(i => i.id);
+    }
+
+    public getCurrentZoneIndex(playerZ: number): number {
+        if (playerZ < 50) return 0;
+        if (playerZ < 130) return 1;
+        if (playerZ < 210) return 2;
+        return 3;
     }
 }

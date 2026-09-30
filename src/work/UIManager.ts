@@ -14,14 +14,17 @@
 import { audio } from './AudioSystem.js';
 import { type PlayerStats, NARRATION_LINES, CREDITS_DATA } from './Constants.js';
 import type { GoreLevel } from './CombatSystem.js';
+import { SaveGameService } from './SaveGameService.js';
 
 export interface UIStateCallbacks {
     onStartGame: () => void;
+    onNewGame?: () => void;
     onResumeGame: () => void;
     onRestartCheckpoint: () => void;
     onQuitToTitle: () => void;
     onApplySettings: (settings: UISettings) => void;
     onFinalChoice: (choice: 'break_seal' | 'offer_blood') => void;
+    onUpgradePurchased?: () => void;
 }
 
 export interface UISettings {
@@ -54,6 +57,8 @@ export class UIManager {
 
     // View states
     public currentScreen: 'title' | 'intro' | 'gameplay' | 'pause' | 'settings' | 'accessibility' | 'checkpoint' | 'death' | 'choice' | 'credits' = 'title';
+    public activeModal: 'none' | 'settings' | 'accessibility' | 'checkpoint' = 'none';
+    private continueBtn: HTMLButtonElement | null = null;
 
     // HUD Elements
     private hudRoot!: HTMLElement;
@@ -413,7 +418,8 @@ export class UIManager {
         const continueBtn = document.createElement('button');
         continueBtn.className = 'rodbra-btn';
         continueBtn.textContent = 'CONTINUE';
-        const hasSave = !!localStorage.getItem('rodbra_save_v1');
+        this.continueBtn = continueBtn;
+        const hasSave = SaveGameService.hasSave();
         continueBtn.disabled = !hasSave;
         continueBtn.onclick = () => {
             audio.playUIConfirm();
@@ -426,12 +432,21 @@ export class UIManager {
         newGameBtn.textContent = 'NEW GAME';
         newGameBtn.onclick = () => {
             audio.playUIConfirm();
-            if (hasSave) {
+            const currentHasSave = SaveGameService.hasSave();
+            if (currentHasSave) {
                 if (confirm('Start a new game and overwrite existing progress?')) {
-                    this.startIntroSequence();
+                    if (this.callbacks.onNewGame) {
+                        this.callbacks.onNewGame();
+                    } else {
+                        this.startIntroSequence();
+                    }
                 }
             } else {
-                this.startIntroSequence();
+                if (this.callbacks.onNewGame) {
+                    this.callbacks.onNewGame();
+                } else {
+                    this.startIntroSequence();
+                }
             }
         };
         menuBtns.appendChild(newGameBtn);
@@ -565,8 +580,7 @@ export class UIManager {
         clearTimeout(this.introTimer);
 
         // Immediately transition screen and start gameplay callbacks
-        this.currentScreen = 'gameplay';
-        this.hudRoot.style.display = 'block';
+        this.showGameplay();
         this.callbacks.onStartGame();
 
         // Fade out intro root
@@ -576,6 +590,19 @@ export class UIManager {
             this.introRoot.style.display = 'none';
             this.introRoot.style.opacity = '1';
         }, 400);
+    }
+
+    public showGameplay(): void {
+        this.currentScreen = 'gameplay';
+        this.titleScreenRoot.style.display = 'none';
+        this.introRoot.style.display = 'none';
+        this.pauseRoot.style.display = 'none';
+        this.modalRoot.style.display = 'none';
+        this.deathRoot.style.display = 'none';
+        this.choiceRoot.style.display = 'none';
+        this.creditsRoot.style.display = 'none';
+        this.activeModal = 'none';
+        this.hudRoot.style.display = 'block';
     }
 
     public isIntroActive(): boolean {
@@ -718,6 +745,7 @@ export class UIManager {
             <button class="rodbra-btn" id="modal-close-btn">SAVE & RETURN</button>
         `;
 
+        this.activeModal = 'settings';
         this.modalRoot.style.display = 'flex';
 
         // Connect inputs
@@ -758,7 +786,7 @@ export class UIManager {
             audio.playUIConfirm();
             this.saveSettingsToStorage();
             this.callbacks.onApplySettings(this.settings);
-            this.modalRoot.style.display = 'none';
+            this.closeModals();
         };
     }
 
@@ -803,6 +831,7 @@ export class UIManager {
             <button class="rodbra-btn" id="access-close-btn">SAVE & RETURN</button>
         `;
 
+        this.activeModal = 'accessibility';
         this.modalRoot.style.display = 'flex';
 
         const selSubs = box.querySelector('#select-subs') as HTMLSelectElement;
@@ -822,7 +851,7 @@ export class UIManager {
             audio.playUIConfirm();
             this.saveSettingsToStorage();
             this.callbacks.onApplySettings(this.settings);
-            this.modalRoot.style.display = 'none';
+            this.closeModals();
         };
     }
 
@@ -869,6 +898,7 @@ export class UIManager {
             <button class="rodbra-btn" id="btn-cp-close">RISE & CONTINUE</button>
         `;
 
+        this.activeModal = 'checkpoint';
         this.modalRoot.style.display = 'flex';
 
         const btnEdge = box.querySelector('#btn-up-edge') as HTMLButtonElement;
@@ -876,6 +906,7 @@ export class UIManager {
             btnEdge.onclick = () => {
                 this.stats.ironNails -= 4;
                 this.stats.upgrades.temperedEdge = true;
+                this.callbacks.onUpgradePurchased?.();
                 audio.playArmorImpact();
                 this.openCheckpointUpgradeModal(); // refresh
             };
@@ -887,6 +918,7 @@ export class UIManager {
                 this.stats.ironNails -= 4;
                 this.stats.upgrades.wovenCharm = true;
                 this.stats.currentHealth = this.stats.baseMaxHealth * 1.2;
+                this.callbacks.onUpgradePurchased?.();
                 audio.playHealFlask();
                 this.openCheckpointUpgradeModal();
             };
@@ -897,6 +929,7 @@ export class UIManager {
             btnWard.onclick = () => {
                 this.stats.ironNails -= 4;
                 this.stats.upgrades.quickenedWard = true;
+                this.callbacks.onUpgradePurchased?.();
                 audio.playWardRecharged();
                 this.openCheckpointUpgradeModal();
             };
@@ -905,8 +938,17 @@ export class UIManager {
         const btnClose = box.querySelector('#btn-cp-close') as HTMLElement;
         btnClose.onclick = () => {
             audio.playUIConfirm();
-            this.modalRoot.style.display = 'none';
+            this.closeModals();
         };
+    }
+
+    public isAnyModalOpen(): boolean {
+        return this.activeModal !== 'none';
+    }
+
+    public closeModals(): void {
+        this.modalRoot.style.display = 'none';
+        this.activeModal = 'none';
     }
 
     // =========================================================================
@@ -1063,9 +1105,20 @@ export class UIManager {
         this.hudRoot.style.display = 'none';
         this.pauseRoot.style.display = 'none';
         this.creditsRoot.style.display = 'none';
+        this.modalRoot.style.display = 'none';
+        this.deathRoot.style.display = 'none';
+        this.choiceRoot.style.display = 'none';
+        this.activeModal = 'none';
         this.titleScreenRoot.style.display = 'flex';
+        this.refreshTitleScreenSaveState();
         audio.setMusicMode('menu');
         this.callbacks.onQuitToTitle();
+    }
+
+    public refreshTitleScreenSaveState(): void {
+        if (this.continueBtn) {
+            this.continueBtn.disabled = !SaveGameService.hasSave();
+        }
     }
 
     // =========================================================================

@@ -26,6 +26,7 @@ import { EnemyManager } from './Enemies.js';
 import { PlayerCombatSystem } from './CombatSystem.js';
 import { WorldZoneManager } from './WorldZones.js';
 import { UIManager, type UISettings } from './UIManager.js';
+import { SaveGameService } from './SaveGameService.js';
 
 export class VoxelGame implements GenreGameInterface {
     private engine: EngineLike;
@@ -65,6 +66,7 @@ export class VoxelGame implements GenreGameInterface {
     private objectiveUpdateTimer: number = 0;
     private prevKeys: Record<string, boolean> = {};
     private rawHeldKeys: Set<string> = new Set();
+    private prevGamepadButtons: boolean[] = [];
 
     constructor(engine: EngineLike, worldProfileData: WorldProfileData, gameData?: GameData) {
         this.engine = engine;
@@ -186,29 +188,21 @@ export class VoxelGame implements GenreGameInterface {
             // Initialize UI Manager
             this.uiManager = new UIManager(this.stats, {
                 onStartGame: () => this.handleStartGame(),
+                onNewGame: () => this.handleNewGame(),
                 onResumeGame: () => this.handleResumeGame(),
                 onRestartCheckpoint: () => this.handleRestartCheckpoint(),
                 onQuitToTitle: () => this.handleQuitToTitle(),
                 onApplySettings: (settings: UISettings) => this.handleApplySettings(settings),
                 onFinalChoice: (choice: 'break_seal' | 'offer_blood') => this.handleFinalChoice(choice),
+                onUpgradePurchased: () => this.handleUpgradePurchased(),
             });
 
-            // Start intro sequence upon clicking engine Play button or immediately if already playing
-            const onPlay = () => {
-                if (!this.hasStartedFirstTime) {
-                    this.hasStartedFirstTime = true;
-                    this.handleStartGame();
-                    this.uiManager?.startIntroSequence();
-                }
-            };
+            // Listen for engine Play state without prematurely skipping title screen
             getGameStateManager().addListener((state) => {
-                if (state === GameState.PLAYING) {
-                    onPlay();
+                if (state === GameState.PLAYING && !this.hasStartedFirstTime) {
+                    this.hasStartedFirstTime = true;
                 }
             });
-            if (getGameStateManager().getCurrentState() === GameState.PLAYING) {
-                onPlay();
-            }
 
             // Register Input Listeners
             this.setupInputHandlers();
@@ -359,7 +353,7 @@ export class VoxelGame implements GenreGameInterface {
     private setupInputHandlers(): void {
         // Direct Mouse & Keyboard Input Bindings for instant responsiveness
         window.addEventListener('mousedown', (e) => {
-            if (this.isPaused || !this.combatSystem) return;
+            if (this.isPaused || this.uiManager?.currentScreen !== 'gameplay' || this.uiManager?.isAnyModalOpen() || !this.combatSystem) return;
             audio.resume();
 
             const isSprinting = !!(this.playerController?.keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
@@ -377,7 +371,7 @@ export class VoxelGame implements GenreGameInterface {
         });
 
         window.addEventListener('mouseup', (e) => {
-            if (this.isPaused || !this.combatSystem) return;
+            if (this.isPaused || this.uiManager?.currentScreen !== 'gameplay' || this.uiManager?.isAnyModalOpen() || !this.combatSystem) return;
             if (e.button === 2) {
                 this.combatSystem.handleHeavyAttackUp();
             }
@@ -388,6 +382,30 @@ export class VoxelGame implements GenreGameInterface {
         });
 
         window.addEventListener('keydown', (e) => {
+            // Priority 1: Modal or pause toggle via Escape
+            if (e.code === 'Escape') {
+                if (this.uiManager?.isAnyModalOpen()) {
+                    audio.playUIBack();
+                    this.uiManager.closeModals();
+                    return;
+                }
+                if (this.uiManager?.currentScreen === 'gameplay' || this.uiManager?.currentScreen === 'pause') {
+                    this.togglePauseGame();
+                    return;
+                }
+            }
+
+            // Priority 2: KeyP pause toggle
+            if (e.code === 'KeyP' && (this.uiManager?.currentScreen === 'gameplay' || this.uiManager?.currentScreen === 'pause')) {
+                this.togglePauseGame();
+                return;
+            }
+
+            // Priority 3: Guard gameplay inputs against paused, modal, or non-gameplay screens
+            if (this.isPaused || this.uiManager?.currentScreen !== 'gameplay' || this.uiManager?.isAnyModalOpen()) {
+                return;
+            }
+
             this.rawHeldKeys.add(e.code);
             if (this.playerController) {
                 if (e.code === 'KeyW' || e.code === 'ArrowUp') this.playerController.rawKeys.forward = true;
@@ -397,15 +415,12 @@ export class VoxelGame implements GenreGameInterface {
                 if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.playerController.rawKeys.sprint = true;
             }
 
-            if (this.isPaused || !this.combatSystem || !this.uiManager) return;
+            if (!this.combatSystem) return;
             audio.resume();
 
             const isSprinting = !!(this.playerController?.keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
 
-            if (e.code === 'Escape' || e.code === 'KeyP') {
-                this.isPaused = !this.isPaused;
-                this.uiManager.togglePause();
-            } else if (e.code === 'Space' || e.code === 'KeyC') {
+            if (e.code === 'Space' || e.code === 'KeyC') {
                 // Dodge Roll with i-frames
                 this.combatSystem.handleDodgeInput();
             } else if (e.code === 'KeyJ' || e.code === 'Enter') {
@@ -419,12 +434,17 @@ export class VoxelGame implements GenreGameInterface {
                 if (item) {
                     if (item.type === 'prayer_post') {
                         item.onInteract();
-                        this.uiManager.openCheckpointUpgradeModal();
+                        this.saveCurrentProgress();
+                        this.uiManager?.openCheckpointUpgradeModal();
                     } else if (item.type === 'elin_altar') {
-                        this.uiManager.openFinalChoiceModal();
+                        if (this.stats.completedBosses.bellMotherBoss) {
+                            item.onInteract();
+                            this.uiManager?.openFinalChoiceModal();
+                        }
                     } else {
                         item.onInteract();
                         item.isConsumed = true;
+                        this.saveCurrentProgress();
                     }
                 } else {
                     // Fallback to throw ward if no interactable in range
@@ -452,15 +472,79 @@ export class VoxelGame implements GenreGameInterface {
                 if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.playerController.rawKeys.sprint = false;
             }
 
-            if (e.code === 'KeyK' && this.combatSystem) {
+            if (e.code === 'KeyK' && this.combatSystem && !this.isPaused && this.uiManager?.currentScreen === 'gameplay') {
                 this.combatSystem.handleHeavyAttackUp();
             }
         });
     }
 
+    public togglePauseGame(): void {
+        if (!this.uiManager) return;
+        if (this.isPaused) {
+            this.isPaused = false;
+            this.uiManager.closePauseMenu();
+            this.rawHeldKeys.clear();
+            if (this.playerController) {
+                this.playerController.rawKeys.forward = false;
+                this.playerController.rawKeys.backward = false;
+                this.playerController.rawKeys.left = false;
+                this.playerController.rawKeys.right = false;
+                this.playerController.rawKeys.sprint = false;
+            }
+        } else {
+            this.isPaused = true;
+            this.rawHeldKeys.clear();
+            if (this.playerController) {
+                this.playerController.rawKeys.forward = false;
+                this.playerController.rawKeys.backward = false;
+                this.playerController.rawKeys.left = false;
+                this.playerController.rawKeys.right = false;
+                this.playerController.rawKeys.sprint = false;
+            }
+            this.uiManager.togglePause();
+        }
+    }
+
     // =========================================================================
     // GAMEPLAY STATE TRANSITIONS
     // =========================================================================
+
+    private handleNewGame(): void {
+        console.log('Starting New Game: clearing saves and resetting state...');
+        SaveGameService.clear(this.engine);
+        this.stats = {
+            ...INITIAL_PLAYER_STATS,
+            upgrades: { ...INITIAL_PLAYER_STATS.upgrades },
+            completedBosses: { ...INITIAL_PLAYER_STATS.completedBosses },
+            unlockedShortcuts: { ...INITIAL_PLAYER_STATS.unlockedShortcuts },
+        };
+        this.recalculateStats();
+
+        if (this.combatSystem) {
+            this.combatSystem.stats = this.stats;
+            this.combatSystem.actionState = 'idle';
+            this.combatSystem.isControlLocked = false;
+        }
+
+        if (this.enemyManager) {
+            this.enemyManager.clearAll();
+        }
+
+        if (this.zoneManager) {
+            this.zoneManager.resetAll();
+        }
+
+        this.isGamePlaying = true;
+        this.isPaused = false;
+        this.rawHeldKeys.clear();
+
+        const swordMesh = getPlayerSwordMesh();
+        if (swordMesh) swordMesh.visible = false;
+
+        this.teleportToCheckpoint(this.zoneManager?.checkpoints[0]?.position || new THREE.Vector3(0, 1.0, 4));
+
+        this.uiManager?.startIntroSequence();
+    }
 
     private handleStartGame(): void {
         this.isGamePlaying = true;
@@ -468,43 +552,69 @@ export class VoxelGame implements GenreGameInterface {
         audio.init();
         audio.setMusicMode('exploration');
 
-        // Sword starts sheathed/on altar until drawn in tutorial
         const swordMesh = getPlayerSwordMesh();
-        if (swordMesh && !this.stats.swordAcquired) {
-            swordMesh.visible = false;
-        }
+        if (swordMesh) swordMesh.visible = this.stats.swordAcquired;
 
-        // Teleport to prologue start
-        this.teleportToCheckpoint(this.zoneManager?.checkpoints[0]!.position || new THREE.Vector3(0, 1.0, 4));
+        if (!this.stats.swordAcquired) {
+            this.teleportToCheckpoint(this.zoneManager?.checkpoints[0]?.position || new THREE.Vector3(0, 1.0, 4));
+        }
     }
 
     private handleResumeGame(): void {
-        this.loadSaveFromStorage();
+        const save = SaveGameService.load();
+        if (save) {
+            this.stats = { ...save.stats };
+            this.recalculateStats();
+            if (this.combatSystem) {
+                this.combatSystem.stats = this.stats;
+                this.combatSystem.actionState = 'idle';
+                this.combatSystem.isControlLocked = false;
+            }
+
+            if (this.zoneManager) {
+                this.zoneManager.restoreFromSave(save);
+            }
+        }
+
         this.isGamePlaying = true;
         this.isPaused = false;
+        this.rawHeldKeys.clear();
         audio.init();
         audio.setMusicMode('exploration');
-        this.uiManager?.currentScreen === 'gameplay';
+
+        this.uiManager?.showGameplay();
 
         const swordMesh = getPlayerSwordMesh();
         if (swordMesh) swordMesh.visible = this.stats.swordAcquired;
 
-        // Teleport to active checkpoint
         const cp = this.zoneManager?.checkpoints.find(c => c.id === this.stats.activeCheckpointId);
         if (cp) {
             this.teleportToCheckpoint(cp.position);
+        } else {
+            this.teleportToCheckpoint(this.zoneManager?.checkpoints[0]?.position || new THREE.Vector3(0, 1.0, 4));
         }
     }
 
     private handleRestartCheckpoint(): void {
         this.isPaused = false;
+        this.recalculateStats();
         this.stats.currentHealth = this.stats.upgrades.wovenCharm ? this.stats.baseMaxHealth * 1.2 : this.stats.baseMaxHealth;
         this.stats.healCharges = this.stats.healMaxCharges;
         this.stats.wardCharges = this.stats.wardMaxCharges;
+        this.rawHeldKeys.clear();
+
         if (this.combatSystem) {
             this.combatSystem.actionState = 'idle';
             this.combatSystem.isControlLocked = false;
+            this.combatSystem.stats = this.stats;
         }
+
+        // Deterministic encounter reset
+        if (this.zoneManager) {
+            this.zoneManager.resetEncounterForCheckpoint(this.stats.activeCheckpointId, this.stats.completedBosses);
+        }
+
+        this.uiManager?.showGameplay();
 
         const cp = this.zoneManager?.checkpoints.find(c => c.id === this.stats.activeCheckpointId);
         if (cp) {
@@ -516,6 +626,23 @@ export class VoxelGame implements GenreGameInterface {
         this.isGamePlaying = false;
         this.isPaused = false;
         this.saveCurrentProgress();
+    }
+
+    private handleUpgradePurchased(): void {
+        this.recalculateStats();
+        this.saveCurrentProgress();
+    }
+
+    public recalculateStats(): void {
+        if (this.stats.upgrades.wovenCharm) {
+            const charmMaxHealth = this.stats.baseMaxHealth * 1.2;
+            if (this.stats.currentHealth > charmMaxHealth) {
+                this.stats.currentHealth = charmMaxHealth;
+            }
+        }
+        if (this.combatSystem) {
+            this.combatSystem.stats = this.stats;
+        }
     }
 
     private handleApplySettings(settings: UISettings): void {
@@ -545,27 +672,16 @@ export class VoxelGame implements GenreGameInterface {
     }
 
     private saveCurrentProgress(): void {
-        try {
-            localStorage.setItem('rodbra_save_v1', JSON.stringify({
-                stats: this.stats,
-                savedAt: Date.now(),
-            }));
-            const persistence = this.engine.getGamePersistence?.();
-            persistence?.save({ stats: this.stats }, 'default', 'Iron Prayer Post');
-        } catch (_) {}
-    }
-
-    private loadSaveFromStorage(): void {
-        try {
-            const raw = localStorage.getItem('rodbra_save_v1');
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (parsed.stats) {
-                    this.stats = { ...this.stats, ...parsed.stats };
-                    if (this.combatSystem) this.combatSystem.stats = this.stats;
-                }
-            }
-        } catch (_) {}
+        if (!this.zoneManager) return;
+        SaveGameService.save({
+            stats: this.stats,
+            activeCheckpointId: this.stats.activeCheckpointId,
+            discoveredCheckpointIds: this.zoneManager.getDiscoveredCheckpointIds(),
+            consumedInteractableIds: this.zoneManager.getConsumedInteractableIds(),
+            completedBosses: { ...this.stats.completedBosses },
+            unlockedShortcuts: { ...this.stats.unlockedShortcuts },
+            currentZoneIndex: this.zoneManager.getCurrentZoneIndex(this.player ? this.player.position.z : 0),
+        }, this.engine);
     }
 
     // =========================================================================
@@ -578,6 +694,15 @@ export class VoxelGame implements GenreGameInterface {
             vt.processDeferredWork();
             return;
         }
+
+        // Check mobile pause and gamepad pause even if already paused
+        const keys = this.playerController?.keys;
+        if (keys && keys['pause'] && !this.prevKeys['pause']) {
+            this.togglePauseGame();
+        }
+        this.prevKeys['pause'] = !!keys?.['pause'];
+
+        this.pollGamepadPause();
 
         if (this.isPaused) return;
 
@@ -606,7 +731,6 @@ export class VoxelGame implements GenreGameInterface {
             if (swordMesh && !swordMesh.visible) swordMesh.visible = true;
         }
 
-        const keys = this.playerController?.keys;
         const isSprinting = !!(keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
         const isMoving = keys ? (keys.forward || keys.backward || keys.left || keys.right || (this.playerController ? this.playerController.moveDirection.lengthSq() > 0.01 : false)) : false;
         const playerPos = this.player ? this.player.position : new THREE.Vector3();
@@ -615,6 +739,9 @@ export class VoxelGame implements GenreGameInterface {
         if (this.playerController) {
             this.playerController.getMovementSystem()?.setMoveSpeed(isSprinting ? 8.2 : 5.0);
         }
+
+        // Poll Gamepad inputs
+        this.pollGamepadInput(isSprinting);
 
         // Mobile touch controls polling with edge detection
         if (keys && this.combatSystem) {
@@ -634,12 +761,16 @@ export class VoxelGame implements GenreGameInterface {
                 if (item) {
                     if (item.type === 'prayer_post') {
                         item.onInteract();
+                        this.saveCurrentProgress();
                         this.uiManager?.openCheckpointUpgradeModal();
                     } else if (item.type === 'elin_altar') {
-                        this.uiManager?.openFinalChoiceModal();
+                        if (this.stats.completedBosses.bellMotherBoss) {
+                            this.uiManager?.openFinalChoiceModal();
+                        }
                     } else {
                         item.onInteract();
                         item.isConsumed = true;
+                        this.saveCurrentProgress();
                     }
                 } else {
                     this.combatSystem.handleThrowWard();
@@ -657,10 +788,6 @@ export class VoxelGame implements GenreGameInterface {
             if (keys.lockon && !this.prevKeys['lockon']) {
                 this.combatSystem.toggleLockOn();
             }
-            if (keys.pause && !this.prevKeys['pause']) {
-                this.isPaused = !this.isPaused;
-                this.uiManager?.togglePause();
-            }
 
             this.prevKeys['dodge'] = !!keys['dodge'];
             this.prevKeys['attack'] = !!keys['attack'];
@@ -670,7 +797,6 @@ export class VoxelGame implements GenreGameInterface {
             this.prevKeys['parry'] = !!keys.parry;
             this.prevKeys['execute'] = !!keys.execute;
             this.prevKeys['lockon'] = !!keys.lockon;
-            this.prevKeys['pause'] = !!keys.pause;
         }
 
         // Update Combat System
@@ -708,6 +834,8 @@ export class VoxelGame implements GenreGameInterface {
                         this.saveCurrentProgress();
                     } else if (enemy.type === 'bell_mother') {
                         this.stats.completedBosses.bellMotherBoss = true;
+                        this.zoneManager?.openElinBarrier();
+                        this.saveCurrentProgress();
                         audio.setMusicMode('ending');
                     }
                 }
@@ -776,6 +904,114 @@ export class VoxelGame implements GenreGameInterface {
 
         if (this.playerController) {
             this.player.rotation.y = this.playerController.rotation;
+        }
+    }
+
+    private pollGamepadPause(): void {
+        if (typeof navigator === 'undefined' || !navigator.getGamepads) return;
+        const gamepads = navigator.getGamepads();
+        const gp = gamepads ? (gamepads[0] || gamepads[1] || gamepads[2] || gamepads[3]) : null;
+        if (!gp || !gp.connected) return;
+
+        const isStartPressed = !!(gp.buttons[9]?.pressed);
+        if (isStartPressed && !this.prevGamepadButtons[9]) {
+            this.togglePauseGame();
+        }
+        this.prevGamepadButtons[9] = isStartPressed;
+    }
+
+    private pollGamepadInput(isSprinting: boolean): void {
+        if (typeof navigator === 'undefined' || !navigator.getGamepads) return;
+        const gamepads = navigator.getGamepads();
+        const gp = gamepads ? (gamepads[0] || gamepads[1] || gamepads[2] || gamepads[3]) : null;
+        if (!gp || !gp.connected || !this.combatSystem || !this.playerController) return;
+
+        // Thumbstick analog movement
+        const stickX = gp.axes[0] ?? 0;
+        const stickY = gp.axes[1] ?? 0;
+        const deadzone = 0.2;
+        if (Math.abs(stickX) > deadzone || Math.abs(stickY) > deadzone) {
+            this.playerController.rawKeys.left = stickX < -deadzone;
+            this.playerController.rawKeys.right = stickX > deadzone;
+            this.playerController.rawKeys.forward = stickY < -deadzone;
+            this.playerController.rawKeys.backward = stickY > deadzone;
+        }
+
+        const buttons = gp.buttons;
+        const isDown = (idx: number) => !!(buttons[idx]?.pressed);
+        const wasJustPressed = (idx: number) => isDown(idx) && !this.prevGamepadButtons[idx];
+        const wasJustReleased = (idx: number) => !isDown(idx) && this.prevGamepadButtons[idx];
+
+        // Button 4: LB (Sprint)
+        if (isDown(4)) {
+            this.playerController.rawKeys.sprint = true;
+        }
+
+        // Button 0: A / Cross (Dodge)
+        if (wasJustPressed(0)) {
+            this.combatSystem.handleDodgeInput();
+        }
+
+        // Button 7: RT / R2 (Light Attack)
+        if (wasJustPressed(7)) {
+            this.combatSystem.handleLightAttackInput(isSprinting || isDown(4));
+        }
+
+        // Button 6: LT / L2 (Heavy Attack)
+        if (wasJustPressed(6)) {
+            this.combatSystem.handleHeavyAttackDown();
+        } else if (wasJustReleased(6)) {
+            this.combatSystem.handleHeavyAttackUp();
+        }
+
+        // Button 5: RB / R1 (Parry)
+        if (wasJustPressed(5)) {
+            this.combatSystem.handleParryInput();
+        }
+
+        // Button 2: X / Square (Interact / Ward)
+        if (wasJustPressed(2)) {
+            const playerPos = this.player!.position;
+            const item = this.zoneManager?.getClosestInteractable(playerPos);
+            if (item) {
+                if (item.type === 'prayer_post') {
+                    item.onInteract();
+                    this.saveCurrentProgress();
+                    this.uiManager?.openCheckpointUpgradeModal();
+                } else if (item.type === 'elin_altar') {
+                    if (this.stats.completedBosses.bellMotherBoss) {
+                        item.onInteract();
+                        this.uiManager?.openFinalChoiceModal();
+                    }
+                } else {
+                    item.onInteract();
+                    item.isConsumed = true;
+                    this.saveCurrentProgress();
+                }
+            } else {
+                this.combatSystem.handleThrowWard();
+            }
+        }
+
+        // Button 1: B / Circle (Heal)
+        if (wasJustPressed(1)) {
+            this.combatSystem.handleHealInput();
+        }
+
+        // Button 3: Y / Triangle (Rend Execution)
+        if (wasJustPressed(3)) {
+            this.combatSystem.handleExecutionInput();
+        }
+
+        // Button 8 / 11: Select or R3 (Lock-on)
+        if (wasJustPressed(8) || wasJustPressed(11)) {
+            this.combatSystem.toggleLockOn();
+        }
+
+        // Store button states for next frame
+        for (let i = 0; i < buttons.length; i++) {
+            if (i === 9) continue;
+            this.prevGamepadButtons[i] = isDown(i);
         }
     }
 

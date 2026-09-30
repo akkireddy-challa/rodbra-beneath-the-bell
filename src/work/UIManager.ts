@@ -473,7 +473,7 @@ export class UIManager {
 
     private buildIntroOverlay(): void {
         this.introRoot = document.createElement('div');
-        this.introRoot.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: auto;';
+        this.introRoot.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none;';
 
         // Initial black fade curtain (fades out in 0.8s)
         const curtain = document.createElement('div');
@@ -504,8 +504,8 @@ export class UIManager {
         bottomBar.appendChild(introText);
 
         const skipHint = document.createElement('div');
-        skipHint.style.cssText = 'position: absolute; bottom: 16px; right: 40px; font-size: 12px; color: #7A7268; letter-spacing: 1px; cursor: pointer;';
-        skipHint.innerHTML = 'Press <span class="rodbra-key-hint">ESC / SPACE</span> to Skip';
+        skipHint.style.cssText = 'position: absolute; bottom: 16px; right: 40px; font-size: 12px; color: #7A7268; letter-spacing: 1px; cursor: pointer; pointer-events: auto;';
+        skipHint.innerHTML = 'Press <span class="rodbra-key-hint">ANY KEY / CLICK</span> to Skip';
         skipHint.onclick = () => this.finishIntro();
         bottomBar.appendChild(skipHint);
 
@@ -564,16 +564,18 @@ export class UIManager {
         this.isIntroPlaying = false;
         clearTimeout(this.introTimer);
 
-        // Fade in to gameplay
-        this.introRoot.style.transition = 'opacity 0.8s ease';
+        // Immediately transition screen and start gameplay callbacks
+        this.currentScreen = 'gameplay';
+        this.hudRoot.style.display = 'block';
+        this.callbacks.onStartGame();
+
+        // Fade out intro root
+        this.introRoot.style.transition = 'opacity 0.4s ease';
         this.introRoot.style.opacity = '0';
         setTimeout(() => {
             this.introRoot.style.display = 'none';
             this.introRoot.style.opacity = '1';
-            this.currentScreen = 'gameplay';
-            this.hudRoot.style.display = 'block';
-            this.callbacks.onStartGame();
-        }, 800);
+        }, 400);
     }
 
     public isIntroActive(): boolean {
@@ -1096,8 +1098,13 @@ export class UIManager {
             this.isGamepadConnected = false;
             this.promptKey.textContent = 'E';
         });
-        window.addEventListener('keydown', (e) => {
-            if (this.isIntroPlaying && (e.code === 'Space' || e.code === 'Escape' || e.code === 'Enter')) {
+        window.addEventListener('keydown', () => {
+            if (this.isIntroPlaying) {
+                this.finishIntro();
+            }
+        });
+        window.addEventListener('mousedown', () => {
+            if (this.isIntroPlaying) {
                 this.finishIntro();
             }
         });

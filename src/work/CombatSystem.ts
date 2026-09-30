@@ -43,9 +43,11 @@ export class PlayerCombatSystem {
     private decals: { mesh: THREE.Mesh; life: number; maxLife: number }[] = [];
     private maxDecals: number = 40;
 
-    // Weapon mesh ref (for trail & blood staining)
+    // Weapon & Arm mesh ref (for trail, blood staining, & procedural attack animation)
     private swordMesh: THREE.Object3D | null = null;
     private swordStainTimer: number = 0;
+    private rightArmMesh: THREE.Object3D | null = null;
+    private rightForearmMesh: THREE.Object3D | null = null;
 
     constructor(
         scene: THREE.Scene,
@@ -61,6 +63,8 @@ export class PlayerCombatSystem {
         this.stats = stats;
 
         this.swordMesh = playerMesh.getObjectByName('liv_seax_sword') || null;
+        this.rightArmMesh = playerMesh.getObjectByName('rightUpperArm') || null;
+        this.rightForearmMesh = playerMesh.getObjectByName('rightForearm') || null;
     }
 
     public setSwordMesh(mesh: THREE.Object3D): void {
@@ -120,6 +124,105 @@ export class PlayerCombatSystem {
         if (this.isLockOnActive) {
             if (!this.targetEnemy || this.targetEnemy.state === 'dead' || this.targetEnemy.position.distanceTo(this.playerMesh.position) > 28) {
                 this.findNextLockTarget();
+            }
+        }
+
+        // Procedural Sword Swing & Attack Animation
+        this.updateProceduralAnimation(dt);
+    }
+
+    private updateProceduralAnimation(dt: number): void {
+        if (!this.rightArmMesh) {
+            this.rightArmMesh = this.playerMesh.getObjectByName('rightUpperArm') || null;
+            this.rightForearmMesh = this.playerMesh.getObjectByName('rightForearm') || null;
+        }
+        if (!this.rightArmMesh) return;
+
+        switch (this.actionState) {
+            case 'light_1': {
+                // Slash 1: Diagonal sweeping slash across from right to left
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.lightAttack1.duration);
+                this.rightArmMesh.rotation.x = -0.3 + Math.sin(p * Math.PI) * 1.3;
+                this.rightArmMesh.rotation.y = -0.6 + p * 1.5;
+                this.rightArmMesh.rotation.z = -0.2 - Math.sin(p * Math.PI) * 0.7;
+                break;
+            }
+
+            case 'light_2': {
+                // Slash 2: Backhand slash sweeping back from left to right
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.lightAttack2.duration);
+                this.rightArmMesh.rotation.x = -0.2 + Math.sin(p * Math.PI) * 1.1;
+                this.rightArmMesh.rotation.y = 0.9 - p * 1.7;
+                this.rightArmMesh.rotation.z = 0.3 + Math.sin(p * Math.PI) * 0.6;
+                break;
+            }
+
+            case 'light_3': {
+                // Slash 3: Overhead vertical power cleave downward
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.lightAttack3.duration);
+                if (p < 0.28) {
+                    this.rightArmMesh.rotation.x = -0.5 - (p / 0.28) * 1.8;
+                    this.rightArmMesh.rotation.y = 0.1;
+                    this.rightArmMesh.rotation.z = 0.1;
+                } else {
+                    const strikeP = (p - 0.28) / 0.72;
+                    this.rightArmMesh.rotation.x = -2.3 + strikeP * 2.8;
+                    this.rightArmMesh.rotation.y = 0.1;
+                    this.rightArmMesh.rotation.z = 0.1;
+                }
+                break;
+            }
+
+            case 'heavy_charge': {
+                // High guard ready stance while charging heavy
+                this.rightArmMesh.rotation.x = -1.5;
+                this.rightArmMesh.rotation.y = -0.5;
+                this.rightArmMesh.rotation.z = -0.3;
+                break;
+            }
+
+            case 'heavy_release': {
+                // Forward lunging thrust with blade tip
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.heavyAttack.duration);
+                this.rightArmMesh.rotation.x = -1.2 + Math.sin(p * Math.PI) * 1.2;
+                this.rightArmMesh.rotation.y = 0.2;
+                this.rightArmMesh.rotation.z = 0.1;
+                break;
+            }
+
+            case 'sprint_attack': {
+                // Wide horizontal running slash
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.sprintAttack.duration);
+                this.rightArmMesh.rotation.x = -0.4 + Math.sin(p * Math.PI) * 1.2;
+                this.rightArmMesh.rotation.y = -0.9 + p * 1.8;
+                this.rightArmMesh.rotation.z = -0.3;
+                break;
+            }
+
+            case 'dodge_attack': {
+                // Rising slash from roll
+                const p = Math.min(1, this.stateTimer / COMBAT_CONFIG.dodgeAttack.duration);
+                this.rightArmMesh.rotation.x = -1.2 + Math.sin(p * Math.PI) * 1.5;
+                this.rightArmMesh.rotation.y = 0.4;
+                this.rightArmMesh.rotation.z = -0.4 + p * 0.8;
+                break;
+            }
+
+            case 'parry': {
+                // Iron ward deflection stance across chest
+                this.rightArmMesh.rotation.x = -1.2;
+                this.rightArmMesh.rotation.y = 0.7;
+                this.rightArmMesh.rotation.z = 0.5;
+                break;
+            }
+
+            case 'idle':
+            default: {
+                // Smoothly decay back to standard resting posture
+                this.rightArmMesh.rotation.x = THREE.MathUtils.lerp(this.rightArmMesh.rotation.x, 0, dt * 8.0);
+                this.rightArmMesh.rotation.y = THREE.MathUtils.lerp(this.rightArmMesh.rotation.y, 0, dt * 8.0);
+                this.rightArmMesh.rotation.z = THREE.MathUtils.lerp(this.rightArmMesh.rotation.z, 0, dt * 8.0);
+                break;
             }
         }
     }

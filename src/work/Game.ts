@@ -59,11 +59,12 @@ export class VoxelGame implements GenreGameInterface {
     private snowCenterScratch: THREE.Vector3 = new THREE.Vector3();
 
     // Game loop flags
-    private isGamePlaying: boolean = false;
+    private isGamePlaying: boolean = true;
     private isPaused: boolean = false;
     private hasStartedFirstTime: boolean = false;
     private objectiveUpdateTimer: number = 0;
     private prevKeys: Record<string, boolean> = {};
+    private rawHeldKeys: Set<string> = new Set();
 
     constructor(engine: EngineLike, worldProfileData: WorldProfileData, gameData?: GameData) {
         this.engine = engine;
@@ -192,14 +193,22 @@ export class VoxelGame implements GenreGameInterface {
                 onFinalChoice: (choice: 'break_seal' | 'offer_blood') => this.handleFinalChoice(choice),
             });
 
-            // Start intro sequence upon clicking engine Play button
-            getGameStateManager().addListener((state) => {
-                if (state === GameState.PLAYING && !this.hasStartedFirstTime) {
+            // Start intro sequence upon clicking engine Play button or immediately if already playing
+            const onPlay = () => {
+                if (!this.hasStartedFirstTime) {
                     this.hasStartedFirstTime = true;
                     this.handleStartGame();
                     this.uiManager?.startIntroSequence();
                 }
+            };
+            getGameStateManager().addListener((state) => {
+                if (state === GameState.PLAYING) {
+                    onPlay();
+                }
             });
+            if (getGameStateManager().getCurrentState() === GameState.PLAYING) {
+                onPlay();
+            }
 
             // Register Input Listeners
             this.setupInputHandlers();
@@ -283,7 +292,33 @@ export class VoxelGame implements GenreGameInterface {
 
         this.playerLoader.applyCharacterModifications(this.player!, this.playerController);
 
+        this.playerController.setJumpInputSuppressed(true);
+
         // Register cross-platform actions (Desktop keys + Mobile touch buttons)
+        this.playerController.registerCustomAction({
+            action: 'sprint',
+            desktop: { keys: ['ShiftLeft', 'ShiftRight'] },
+            mobile: { label: 'SPRINT', behavior: 'continuous', role: 'primary' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'dodge',
+            desktop: { keys: ['Space', 'KeyC'] },
+            mobile: { label: 'DODGE', behavior: 'tap', role: 'primary' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'attack',
+            desktop: { keys: ['Enter', 'KeyJ'] },
+            mobile: { label: 'SLASH', behavior: 'tap', role: 'danger' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'heavy',
+            desktop: { keys: ['KeyK'] },
+            mobile: { label: 'HEAVY', behavior: 'tap', role: 'danger' },
+        });
+
         this.playerController.registerCustomAction({
             action: 'parry',
             desktop: { keys: ['KeyQ', 'KeyF'] },
@@ -324,12 +359,13 @@ export class VoxelGame implements GenreGameInterface {
     private setupInputHandlers(): void {
         // Direct Mouse & Keyboard Input Bindings for instant responsiveness
         window.addEventListener('mousedown', (e) => {
-            if (!this.isGamePlaying || this.isPaused || !this.combatSystem || this.uiManager?.isIntroActive()) return;
+            if (this.isPaused || !this.combatSystem) return;
             audio.resume();
 
+            const isSprinting = !!(this.playerController?.keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
+
             if (e.button === 0) {
-                // Left Click -> Light Attack Combo
-                const isSprinting = this.playerController?.keys?.sprint || false;
+                // Left Click -> Light Attack Combo (or sprint attack if running)
                 this.combatSystem.handleLightAttackInput(isSprinting);
             } else if (e.button === 2) {
                 // Right Click -> Charged Heavy Attack
@@ -341,26 +377,41 @@ export class VoxelGame implements GenreGameInterface {
         });
 
         window.addEventListener('mouseup', (e) => {
-            if (!this.isGamePlaying || this.isPaused || !this.combatSystem || this.uiManager?.isIntroActive()) return;
+            if (this.isPaused || !this.combatSystem) return;
             if (e.button === 2) {
                 this.combatSystem.handleHeavyAttackUp();
             }
         });
 
         window.addEventListener('contextmenu', (e) => {
-            if (this.isGamePlaying) e.preventDefault();
+            e.preventDefault();
         });
 
         window.addEventListener('keydown', (e) => {
-            if (!this.isGamePlaying || !this.combatSystem || !this.uiManager) return;
+            this.rawHeldKeys.add(e.code);
+            if (this.playerController) {
+                if (e.code === 'KeyW' || e.code === 'ArrowUp') this.playerController.rawKeys.forward = true;
+                if (e.code === 'KeyS' || e.code === 'ArrowDown') this.playerController.rawKeys.backward = true;
+                if (e.code === 'KeyA' || e.code === 'ArrowLeft') this.playerController.rawKeys.left = true;
+                if (e.code === 'KeyD' || e.code === 'ArrowRight') this.playerController.rawKeys.right = true;
+                if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.playerController.rawKeys.sprint = true;
+            }
+
+            if (this.isPaused || !this.combatSystem || !this.uiManager) return;
             audio.resume();
+
+            const isSprinting = !!(this.playerController?.keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
 
             if (e.code === 'Escape' || e.code === 'KeyP') {
                 this.isPaused = !this.isPaused;
                 this.uiManager.togglePause();
-            } else if (e.code === 'Space') {
+            } else if (e.code === 'Space' || e.code === 'KeyC') {
                 // Dodge Roll with i-frames
                 this.combatSystem.handleDodgeInput();
+            } else if (e.code === 'KeyJ' || e.code === 'Enter') {
+                this.combatSystem.handleLightAttackInput(isSprinting);
+            } else if (e.code === 'KeyK') {
+                this.combatSystem.handleHeavyAttackDown();
             } else if (e.code === 'KeyE') {
                 // Check if near interactable
                 const playerPos = this.player!.position;
@@ -388,6 +439,21 @@ export class VoxelGame implements GenreGameInterface {
             } else if (e.code === 'Tab' || e.code === 'KeyT') {
                 e.preventDefault();
                 this.combatSystem.toggleLockOn();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            this.rawHeldKeys.delete(e.code);
+            if (this.playerController) {
+                if (e.code === 'KeyW' || e.code === 'ArrowUp') this.playerController.rawKeys.forward = false;
+                if (e.code === 'KeyS' || e.code === 'ArrowDown') this.playerController.rawKeys.backward = false;
+                if (e.code === 'KeyA' || e.code === 'ArrowLeft') this.playerController.rawKeys.left = false;
+                if (e.code === 'KeyD' || e.code === 'ArrowRight') this.playerController.rawKeys.right = false;
+                if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.playerController.rawKeys.sprint = false;
+            }
+
+            if (e.code === 'KeyK' && this.combatSystem) {
+                this.combatSystem.handleHeavyAttackUp();
             }
         });
     }
@@ -517,8 +583,14 @@ export class VoxelGame implements GenreGameInterface {
 
         this.elapsedTime += deltaTime;
 
-        // Player controller physics update
-        if (this.playerController && !this.uiManager?.isIntroActive()) {
+        // Player controller physics update - ALWAYS update so Liv can move and respond to input
+        if (this.playerController) {
+            this.playerController.rawKeys.forward = this.rawHeldKeys.has('KeyW') || this.rawHeldKeys.has('ArrowUp');
+            this.playerController.rawKeys.backward = this.rawHeldKeys.has('KeyS') || this.rawHeldKeys.has('ArrowDown');
+            this.playerController.rawKeys.left = this.rawHeldKeys.has('KeyA') || this.rawHeldKeys.has('ArrowLeft');
+            this.playerController.rawKeys.right = this.rawHeldKeys.has('KeyD') || this.rawHeldKeys.has('ArrowRight');
+            this.playerController.rawKeys.sprint = this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight');
+
             this.playerController.update(deltaTime);
         }
 
@@ -534,13 +606,29 @@ export class VoxelGame implements GenreGameInterface {
             if (swordMesh && !swordMesh.visible) swordMesh.visible = true;
         }
 
-        const isSprinting = this.playerController?.keys?.sprint || false;
         const keys = this.playerController?.keys;
-        const isMoving = keys ? (keys.forward || keys.backward || keys.left || keys.right) : false;
+        const isSprinting = !!(keys?.['sprint'] || this.rawHeldKeys.has('ShiftLeft') || this.rawHeldKeys.has('ShiftRight'));
+        const isMoving = keys ? (keys.forward || keys.backward || keys.left || keys.right || (this.playerController ? this.playerController.moveDirection.lengthSq() > 0.01 : false)) : false;
         const playerPos = this.player ? this.player.position : new THREE.Vector3();
 
+        // Dynamic Sprint Speed: 8.2 m/s sprint, 5.0 m/s run
+        if (this.playerController) {
+            this.playerController.getMovementSystem()?.setMoveSpeed(isSprinting ? 8.2 : 5.0);
+        }
+
         // Mobile touch controls polling with edge detection
-        if (keys && this.combatSystem && !this.uiManager?.isIntroActive()) {
+        if (keys && this.combatSystem) {
+            if (keys['dodge'] && !this.prevKeys['dodge']) {
+                this.combatSystem.handleDodgeInput();
+            }
+            if (keys['attack'] && !this.prevKeys['attack']) {
+                this.combatSystem.handleLightAttackInput(isSprinting);
+            }
+            if (keys['heavy'] && !this.prevKeys['heavy']) {
+                this.combatSystem.handleHeavyAttackDown();
+            } else if (!keys['heavy'] && this.prevKeys['heavy']) {
+                this.combatSystem.handleHeavyAttackUp();
+            }
             if (keys.ward && !this.prevKeys['ward']) {
                 const item = this.zoneManager?.getClosestInteractable(playerPos);
                 if (item) {
@@ -574,6 +662,9 @@ export class VoxelGame implements GenreGameInterface {
                 this.uiManager?.togglePause();
             }
 
+            this.prevKeys['dodge'] = !!keys['dodge'];
+            this.prevKeys['attack'] = !!keys['attack'];
+            this.prevKeys['heavy'] = !!keys['heavy'];
             this.prevKeys['ward'] = !!keys.ward;
             this.prevKeys['heal'] = !!keys.heal;
             this.prevKeys['parry'] = !!keys.parry;

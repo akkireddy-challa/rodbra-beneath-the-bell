@@ -57,7 +57,7 @@ export const INITIAL_PLAYER_STATS: PlayerStats = {
         wovenCharm: false,
         quickenedWard: false,
     },
-    swordAcquired: false,
+    swordAcquired: true,
     activeCheckpointId: 'checkpoint_prologue',
     completedBosses: {
         hollowThrallTutorial: false,

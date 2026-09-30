@@ -57,8 +57,40 @@ export class VoxelPlayerController extends PlayerController {
         }
     }
 
+    public rawKeys = {
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        sprint: false,
+    };
+
+    override shouldProcessInput(): boolean {
+        if (!this.getControlsEnabled()) return false;
+        if (this.engine) this.engine.isWindowFocused = true;
+        const editorManager = this.engine?.editorManager;
+        if (editorManager && (editorManager.isEditorMode || editorManager.heightmapEditorEnabled)) return false;
+        return true;
+    }
+
+    override calculateMoveDirection(): void {
+        super.calculateMoveDirection();
+        if (this.moveDirection.lengthSq() < 0.001 && this.cameraController) {
+            const forward = this.cameraController.getForwardVector();
+            const right = this.cameraController.getRightVector();
+            if (this.rawKeys.forward) this.moveDirection.add(forward);
+            if (this.rawKeys.backward) this.moveDirection.sub(forward);
+            if (this.rawKeys.left) this.moveDirection.sub(right);
+            if (this.rawKeys.right) this.moveDirection.add(right);
+            if (this.moveDirection.length() > 0) this.moveDirection.normalize();
+        }
+    }
+
     override update(deltaTime: number): void {
         if (!this.playerBody) return;
+
+        // Ensure engine isWindowFocused is kept true during gameplay
+        if (this.engine) this.engine.isWindowFocused = true;
 
         // Apply terrain-based effects (genre-specific pre-processing)
         if (!this.isPlayerInVehicle() && this.isGrounded) {
@@ -67,6 +99,13 @@ export class VoxelPlayerController extends PlayerController {
 
         // Base class handles mobile + desktop input via applyMobileInput()
         super.update(deltaTime);
+
+        // Re-assert raw keys if desktop assignment cleared them
+        if (this.rawKeys.sprint) this.keys['sprint'] = true;
+        if (this.rawKeys.forward) this.keys.forward = true;
+        if (this.rawKeys.backward) this.keys.backward = true;
+        if (this.rawKeys.left) this.keys.left = true;
+        if (this.rawKeys.right) this.keys.right = true;
     }
 
     private applyTerrainEffects(deltaTime: number): void {

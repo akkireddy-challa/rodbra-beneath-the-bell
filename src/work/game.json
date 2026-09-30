@@ -1,10 +1,10 @@
 {
   "gameId": "TKX4CHDMO0KN",
   "gameGenre": "Voxel",
-  "gameName": "Empty 3D",
-  "gameDescription": "The default Bitmagic scene template without objects",
+  "gameName": "RÖDBRÅ: Beneath the Bell",
+  "gameDescription": "Winter, 1893. Monster hunter Liv Ravn returns to the isolated Scandinavian valley of Vargdal after every church bell rings simultaneously. A dark-fantasy action slasher featuring responsive 3-hit combos, charged heavy thrusts, dodge invulnerability, directional parries, iron ward projectiles, checkpoints at iron prayer posts, Rend executions, four distinct enemy archetypes, two minibosses, and a 3-phase final boss fight beneath a colossal suspended cracked bronze bell.",
   "characterUrl": "",
-  "thumbnailUrl": "https://beta.portal.bitmagic.cloud/worlds/v3/TKX4CHDMO0KN/1778161897282-screenshot-template-TKX4CHDMO0KN-1778161897207.jpg",
+  "thumbnailUrl": "https://forged-assets.bitmagic.ai/images/b46c075f-93e3-4a08-9868-6542ed1e7210/image.webp",
   "environmentObjectsGeneratedProcedurally": false,
   "primaryPlatform": "desktop"
 }

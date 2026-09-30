@@ -1,10 +1,3 @@
-// AI editor note: This file is overridden by EVERY community template under
-// /templates/<slug>/source/Game.ts — it's the one file all 6 templates
-// commit a per-template version of. If you rename exports, change the
-// constructor signature, or alter the GenreGameInterface this class
-// implements, search every overlay for stale references and update them
-// in lockstep (pnpm run check does NOT cover templates — drift lands
-// silently). See ../../../../templates/README.md for the full contract.
 import * as THREE from 'three';
 import type { WorldProfileData, EngineLike, GameData } from 'types/game.js';
 import { PlayerController } from 'engine/PlayerController.js';
@@ -15,43 +8,62 @@ import { WorldGenerator } from './WorldGenerator.js';
 import { SkyboxLoader } from 'engine/loaders/SkyboxLoader.js';
 import { PlayerLoader } from 'engine/loaders/PlayerLoader.js';
 import { AmbientLighting } from 'engine/lighting/AmbientLighting.js';
-// DebugController is only available in development - handled dynamically
 import { GameHUD } from './GameHUD.js';
-import { bitmagicCharacterFactory, applyBitmagicModifications, updateBitmagicEyeBlink } from './BitmagicPlayerCharacter.js';
+import { bitmagicCharacterFactory, applyBitmagicModifications, updateBitmagicEyeBlink, getPlayerSwordMesh } from './BitmagicPlayerCharacter.js';
 import { genreRegistry, type GenreGameInterface } from 'engine/GenreRegistry.js';
 import { DEFAULT_PHYSICS } from './PhysicsConfig.js';
-import { CONSTANTS } from './Constants.js';
+import { CONSTANTS, INITIAL_PLAYER_STATS, type PlayerStats } from './Constants.js';
 import { VehicleManager } from 'engine/VehicleManager.js';
 import { Spawner } from 'engine/Spawner.js';
 import { VehicleSpawner } from 'engine/VehicleSpawner.js';
 import { mergeCharacterConfig } from 'engine/CharacterConfig.js';
+import { AmbientSnowVFX } from 'engine/effects/AmbientSnowVFX.js';
+import { getGameStateManager, GameState } from 'engine/GameStateManager.js';
+
+// RÖDBRÅ Game Systems
+import { audio } from './AudioSystem.js';
+import { EnemyManager } from './Enemies.js';
+import { PlayerCombatSystem } from './CombatSystem.js';
+import { WorldZoneManager } from './WorldZones.js';
+import { UIManager, type UISettings } from './UIManager.js';
 
 export class VoxelGame implements GenreGameInterface {
     private engine: EngineLike;
     private worldProfileData: WorldProfileData;
     private world: THREE.Object3D | null;
     private player: THREE.Object3D | null;
-    private playerController: PlayerController | null;
+    private playerController: VoxelPlayerController | null;
     private cameraController: ThirdPersonCamera | null;
     private cameraManager: CameraManager | null = null;
     public worldGenerator: WorldGenerator | null = null;
     private skyboxLoader: SkyboxLoader;
     private playerLoader: PlayerLoader;
     private ambientLighting: AmbientLighting;
-    private debugController: any | null = null;
     public hud: GameHUD;
     private vehicleManager: VehicleManager;
     private spawner: Spawner;
     private vehicleSpawner: VehicleSpawner;
     private gameId: string | null = null;
-
     private gameData: GameData | null = null;
-    private elapsedTime: number = 0; // Track elapsed time for animated textures
+    private elapsedTime: number = 0;
     private hemisphereLight: THREE.HemisphereLight | null = null;
+    private moonLight: THREE.DirectionalLight | null = null;
 
-    private wasRecordingFrames: boolean = false;
-    private cullingWasEnabledBeforeRecording: boolean = false;
-    private envCullingWasEnabledBeforeRecording: boolean = false;
+    // RÖDBRÅ Core Managers
+    public stats: PlayerStats = { ...INITIAL_PLAYER_STATS, upgrades: { ...INITIAL_PLAYER_STATS.upgrades }, completedBosses: { ...INITIAL_PLAYER_STATS.completedBosses }, unlockedShortcuts: { ...INITIAL_PLAYER_STATS.unlockedShortcuts } };
+    public enemyManager: EnemyManager | null = null;
+    public combatSystem: PlayerCombatSystem | null = null;
+    public zoneManager: WorldZoneManager | null = null;
+    public uiManager: UIManager | null = null;
+    private snowVFX: AmbientSnowVFX | null = null;
+    private snowCenterScratch: THREE.Vector3 = new THREE.Vector3();
+
+    // Game loop flags
+    private isGamePlaying: boolean = false;
+    private isPaused: boolean = false;
+    private hasStartedFirstTime: boolean = false;
+    private objectiveUpdateTimer: number = 0;
+    private prevKeys: Record<string, boolean> = {};
 
     constructor(engine: EngineLike, worldProfileData: WorldProfileData, gameData?: GameData) {
         this.engine = engine;
@@ -62,76 +74,42 @@ export class VoxelGame implements GenreGameInterface {
         this.playerController = null;
         this.cameraController = null;
 
-        // Require seed from worldProfileData - throw error if not found
         if (worldProfileData.worldSeed === undefined) {
             throw new Error('worldSeed is required in worldProfileData for consistent world generation');
         }
 
-        try {
-            console.log('Creating SkyboxLoader...', { engine: !!engine, worldProfileData: !!worldProfileData });
-            this.skyboxLoader = new SkyboxLoader(engine, worldProfileData);
-            console.log('SkyboxLoader created successfully:', !!this.skyboxLoader);
-        } catch (error) {
-            console.error('Failed to create SkyboxLoader:', error);
-            throw error;
-        }
-
+        this.skyboxLoader = new SkyboxLoader(engine, worldProfileData);
         this.playerLoader = new PlayerLoader(engine, worldProfileData);
-
-        // Expose playerLoader on engine for debug tools
         this.engine.setPlayerLoader?.(this.playerLoader);
-
         this.ambientLighting = new AmbientLighting(engine, this.skyboxLoader);
-        // DebugController will be initialized lazily in load() method if available
-        // gameName is required and must come from game.json (now at top level of gameData)
-        const gameName = this.gameData?.gameName;
-        if (!gameName) {
-            console.error('[VoxelGame] gameData:', this.gameData);
-            throw new Error('[VoxelGame] gameName is required in gameData but was not provided. Ensure game.json is loaded and merged correctly.');
-        }
+
         this.hud = new GameHUD();
         this.vehicleManager = new VehicleManager(engine);
         this.spawner = new Spawner(engine);
         this.vehicleSpawner = new VehicleSpawner(this.spawner, this.vehicleManager);
 
-        // Expose Spawner and VehicleSpawner on engine for easy access from templates
         this.engine.setSpawner?.(this.spawner);
         this.engine.setVehicleSpawner?.(this.vehicleSpawner);
 
-        // Provide block character factory using new interface-based approach
+        // Plug Liv Ravn character factory into engine
         this.engine.blockCharacterFactory = bitmagicCharacterFactory;
-
-        // Provide Bitmagic modifications callback for post-creation scaling/physics
         this.engine.applyCharacterModifications = applyBitmagicModifications;
     }
 
     async load(gameId: string): Promise<void> {
         try {
-            // Store gameId for WorldGenerator
             this.gameId = gameId;
 
-            // Bloom is now configured automatically from world.json in GameEngine.loadGame()
-
-            // Create WorldGenerator now that we have gameId
+            // Generate baseline world
             if (!this.worldGenerator) {
-                // Determine initial world size from ground type settings if available, otherwise default to 128
-                const initialWorldSize = this.worldProfileData.groundWorldSizeX
-                    ? Math.max(this.worldProfileData.groundWorldSizeX, this.worldProfileData.groundWorldSizeZ || 128)
-                    : 128;
-
-                // worldSeed is already validated in constructor, so we know it's defined
+                const initialWorldSize = 384; // Extended length for all 4 connected zones
                 const seed = this.worldProfileData.worldSeed!;
-
-                // Pass gameId and gameData to WorldGenerator so it can load saved heightmaps and pass data to systems
                 this.worldGenerator = new WorldGenerator(initialWorldSize, seed, this.worldProfileData, this.engine, gameId, this.gameData);
-
-                // Expose findValidVoxelSpawnPosition for proper animal/NPC spawning in voxel terrain
                 this.engine.findValidVoxelSpawnPosition = (x: number, z: number, fromY?: number) => {
                     return this.worldGenerator?.findValidVoxelSpawnPosition(x, z, fromY) || null;
                 };
             }
 
-            // Always generate full world in Voxel mode
             await this.worldGenerator.generateWorld();
             this.world = this.worldGenerator.getWorld();
 
@@ -139,157 +117,143 @@ export class VoxelGame implements GenreGameInterface {
                 throw new Error('WorldGenerator failed to create world object');
             }
 
-            // Ground physics is now created automatically with visual chunks via generateGroundChunks()
-            // which properly tracks both visual mesh and physics body together.
-            // Physics bodies are added to physics world during chunk generation.
-
-            // Add all other physics bodies (scenery, etc.) to physics world
             this.worldGenerator.getWorldBodies().forEach(body => {
                 if (this.engine.physicsWorld && body) {
                     this.engine.physicsWorld.addRigidBody(body);
                 }
             });
 
-
             await this.skyboxLoader.loadSkybox();
             this.ambientLighting.updateFromScene();
 
-            // Empty-3D starts with no skybox (world.json skyboxUrl is ""), so the
-            // sky is the engine's fogConfig-driven background color. Do NOT remove
-            // the "Skybox" mesh here — if a real skyboxUrl is later configured,
-            // loadSkybox() adds the mesh and it must be allowed to render.
+            // Set up cold Nordic blue dusk & moonlight lighting
+            this.setupAtmosphericLighting();
 
-            // Show the engine Play button (default behavior, made explicit so
-            // state from a prior game that hid it doesn't carry over).
-            this.engine.setPlayButtonVisible?.(true);
-
-            // Set up warm sunset lighting for the voxel art style (skipped for low-poly mesh-level worlds)
-            this.setupVoxelLighting();
-
-            // Physics step for terrain colliders is now done in WorldGenerator.generateWorld()
-            // after finalizeTerrain(), so all physics bodies created afterward work correctly
-
-            // Connect terrain system to DynamicObjectManager for chunk-based hibernation
-            const voxelTerrain = this.worldGenerator.getVoxelTerrainSystem();
-            if (voxelTerrain && this.engine.getDynamicObjectManager) {
-                this.engine.getDynamicObjectManager().setTerrainSystem(voxelTerrain);
-            }
-
+            // Load Liv Ravn Player Character
             this.player = await this.playerLoader.loadPlayer();
-
-            // Enable bloom effect on player if configured
             this.engine.enableBloomOnObject?.(this.player);
 
             this.setupCamera();
-
-            // Initialize DebugController if available (development only) - before setupPlayerController
-            try {
-                const { DebugController } = await import('engine/DebugController.js');
-                this.debugController = new DebugController(this.engine);
-            } catch (error) {
-                // DebugController not available - this is fine for production builds
-                console.log('DebugController not available (expected in production)');
-            }
-
             await this.setupPlayerController();
 
-            // Enable player gravity NOW that terrain is fully loaded
-            // Physics won't actually step until GameState becomes PLAYING (on Play button click)
             this.playerLoader.enablePlayerGravity();
 
-            console.log('✅ Game loaded - waiting for Play button');
+            // Initialize Falling Snow Flurries
+            if (this.engine.scene) {
+                this.snowVFX = new AmbientSnowVFX(this.engine.scene, {
+                    density: 0.6,
+                    maxParticles: 1200,
+                    fallSpeed: 2.8,
+                    wind: new THREE.Vector3(3.5, 0, 1.2),
+                    flakeSize: 0.28,
+                    color: 0xDAE8F2,
+                    opacity: 0.85,
+                    radius: 40,
+                    columnHeight: 30,
+                    groundDrop: 4,
+                });
+            }
 
-            // Show the HUD
-            this.hud.show();
+            // Initialize Enemy Manager
+            this.enemyManager = new EnemyManager(this.engine.scene!);
 
-            // Load custom animations in the background (non-blocking)
-            this.loadCustomAnimations().catch(error => {
-                console.error('Failed to load custom animations:', error);
+            // Initialize Player Combat System
+            this.combatSystem = new PlayerCombatSystem(
+                this.engine.scene!,
+                this.player!,
+                this.engine.getDefaultCamera(),
+                this.enemyManager,
+                this.stats
+            );
+
+            // Initialize World Zone Manager (Builds all 4 zones, chapel, waterwheel, colossal bell, Elin)
+            this.zoneManager = new WorldZoneManager(
+                this.engine.scene!,
+                this.engine.physicsWorld!,
+                this.enemyManager,
+                this.stats
+            );
+
+            // Connect Mill timing hazard hit callback
+            this.zoneManager.setHazardHitCallback((dmg, hitDir) => {
+                if (this.combatSystem && !this.combatSystem.isInvulnerable) {
+                    this.combatSystem.takeDamage(dmg, hitDir);
+                    audio.playArmorImpact();
+                }
             });
 
-            console.log('Voxel game loaded successfully');
+            // Initialize UI Manager
+            this.uiManager = new UIManager(this.stats, {
+                onStartGame: () => this.handleStartGame(),
+                onResumeGame: () => this.handleResumeGame(),
+                onRestartCheckpoint: () => this.handleRestartCheckpoint(),
+                onQuitToTitle: () => this.handleQuitToTitle(),
+                onApplySettings: (settings: UISettings) => this.handleApplySettings(settings),
+                onFinalChoice: (choice: 'break_seal' | 'offer_blood') => this.handleFinalChoice(choice),
+            });
+
+            // Start intro sequence upon clicking engine Play button
+            getGameStateManager().addListener((state) => {
+                if (state === GameState.PLAYING && !this.hasStartedFirstTime) {
+                    this.hasStartedFirstTime = true;
+                    this.handleStartGame();
+                    this.uiManager?.startIntroSequence();
+                }
+            });
+
+            // Register Input Listeners
+            this.setupInputHandlers();
+
+            console.log('✅ RÖDBRÅ: Beneath the Bell loaded successfully');
         } catch (error) {
-            console.error('Failed to load Voxel game:', error);
+            console.error('Failed to load RÖDBRÅ:', error);
             throw error;
         }
     }
 
+    private setupAtmosphericLighting(): void {
+        if (!this.engine.scene) return;
+
+        // Cold blue dusk sky and dark earth ground
+        this.hemisphereLight = new THREE.HemisphereLight(0x324A5E, 0x141618, 0.9);
+        this.engine.scene.add(this.hemisphereLight);
+
+        // Directional moonlight from high angle
+        this.moonLight = new THREE.DirectionalLight(0x7D9BB5, 0.85);
+        this.moonLight.position.set(25, 45, -15);
+        this.engine.scene.add(this.moonLight);
+
+        // Dense cold blue dusk fog
+        this.engine.scene.fog = new THREE.Fog(0x131D26, 30, 160);
+    }
+
     private setupCamera(): void {
         if (this.engine.camera && this.engine.renderer) {
-            // Read camera mode from configuration, default to third-person
-            const cameraMode = this.worldProfileData.cameraMode || 'third-person';
-            
-            // Create CameraManager with configured camera mode
             this.cameraManager = new CameraManager(
                 this.engine.getDefaultCamera(),
                 this.player!,
                 this.engine.renderer.domElement,
                 this.engine,
-                cameraMode
+                'third-person'
             );
-
-            // Get reference to the active camera controller (could be ThirdPerson, FirstPerson, or TopDown)
-            // Fall back to ThirdPersonCamera for backward compatibility if no active controller
-            this.cameraController = (this.cameraManager.getActiveController() as ThirdPersonCamera) 
+            this.cameraController = (this.cameraManager.getActiveController() as ThirdPersonCamera)
                 ?? this.cameraManager.getThirdPersonCamera();
+
+            // Over-the-shoulder framing for dark fantasy slasher
+            if (this.cameraController) {
+                this.cameraController.distance = 4.2;
+                this.cameraController.shoulderOffsetRight = 0.65;
+                this.cameraController.lookAtHeight = 1.35;
+            }
         }
-    }
-
-    /**
-     * Set up warm sunset lighting for the voxel art style.
-     * Adds HemisphereLight for soft ambient lighting. A low-poly game whose mesh level
-     * lights itself as an interior (a MeshLevel built in game code, or a declared
-     * `meshLevel` with `lighting: 'interior'`) skips it: the level brings its own
-     * hemisphere light, and the two stacked wash out an interior. Exterior mesh levels
-     * (the default for a declared one) and voxel terrain keep it.
-     */
-    private setupVoxelLighting(): void {
-        if (!this.engine.scene) return;
-        const wpd = this.gameData?.worldProfileData;
-        const meshLevelLightsItself = wpd?.terrain?.shape === 'none' && (!wpd.meshLevel || wpd.meshLevel.lighting === 'interior');
-        if (this.gameData?.artStyle === 'low-poly' && meshLevelLightsItself) return;
-
-        // Empty-3D override: neutral hemisphere light so the clean blue
-        // background isn't tinted yellow. Baseline default is warm golden /
-        // dark blue (sunset feel) which clashes with the solid-blue sky.
-        this.hemisphereLight = new THREE.HemisphereLight(
-            0xffffff,  // Sky color - neutral white
-            0x404040,  // Ground color - neutral gray
-            1.0        // Intensity
-        );
-        this.engine.scene.add(this.hemisphereLight);
-
-        console.log('✨ Voxel lighting setup complete');
-    }
-
-    /**
-     * Get the hemisphere light for runtime adjustments.
-     * 
-     * Use this to adjust ambient lighting based on location (outdoors vs dungeon):
-     * ```typescript
-     * const hemi = game.getHemisphereLight();
-     * if (hemi) {
-     *     hemi.color.setHex(0xffeeb1);      // Sky color (surfaces facing up)
-     *     hemi.groundColor.setHex(0x101010); // Ground color (surfaces facing down)
-     *     hemi.intensity = 0.3;              // Overall intensity
-     * }
-     * ```
-     */
-    getHemisphereLight(): THREE.HemisphereLight | null {
-        return this.hemisphereLight;
     }
 
     private async setupPlayerController(): Promise<void> {
         const playerBody = this.playerLoader.getPlayerBody();
-        if (!playerBody) {
-            throw new Error('Player physics body not created');
+        if (!playerBody || !this.engine.physicsWorld) {
+            throw new Error('Physics world or body not initialized');
         }
 
-        if (!this.engine.physicsWorld) {
-            throw new Error('Physics world not initialized');
-        }
-
-        console.log('🎮 VoxelGame: Using VoxelPlayerController');
         this.playerController = new VoxelPlayerController(
             this.player!,
             playerBody,
@@ -298,233 +262,426 @@ export class VoxelGame implements GenreGameInterface {
             this.engine,
             DEFAULT_PHYSICS,
             this.worldGenerator,
-            undefined, // movementSystem
+            undefined,
             CONSTANTS
         );
 
-        // Register playerController with engine for debug systems (NpcManager projectile detection)
         this.engine.registerPlayerController(this.playerController);
 
-        // Apply movement speed from characterConfig (runSpeed is used as the default movement speed)
         const charConfig = mergeCharacterConfig(this.worldProfileData.characterConfig);
         this.playerController.getMovementSystem().setMoveSpeed(charConfig.runSpeed);
 
-        // Set the calculated capsule dimensions for accurate ground detection
-        const capsuleHeight = this.playerLoader.getCapsuleHeight();
-        const capsuleRadius = this.playerLoader.getCapsuleRadius();
-        if (this.playerController) {
-            this.playerController.setCapsuleDimensions(capsuleHeight, capsuleRadius);
-            // Set voxel block size for step climbing (player + all dynamic objects)
-            if (this.worldGenerator) {
-                const voxelBlockSize = this.worldGenerator.getVoxelBlockSize();
-                this.playerController.voxelBlockSize = voxelBlockSize;
-                // Set for all dynamic objects (animals, NPCs) - both existing and future
-                const dynamicObjectManager = this.engine.getDynamicObjectManager?.();
-                if (dynamicObjectManager) {
-                    dynamicObjectManager.setVoxelBlockSize(voxelBlockSize);
-                }
-            }
-        }
+        const capsuleHeight = 1.68;
+        const capsuleRadius = 0.32;
+        this.playerController.setCapsuleDimensions(capsuleHeight, capsuleRadius);
 
-        // Connect animation controller to player controller
-        const animationController = this.playerLoader.getAnimationController();
+        const animController = this.playerLoader.getAnimationController();
         if (this.playerController) {
-            this.playerController.setAnimationController(animationController);
-        }
-
-        // Connect PlayerLoader to PlayerController for character switching
-        if (this.playerController) {
+            this.playerController.setAnimationController(animController);
             this.playerController.setPlayerLoader(this.playerLoader);
         }
 
-        // Connect vehicle manager to player controller
-        this.playerController.setVehicleManager(this.vehicleManager);
-
-        // Set up callback for when player object changes (for character switching)
-        if (this.playerController) {
-            this.playerController.setOnPlayerChangedCallback((newPlayer: THREE.Object3D) => {
-                this.player = newPlayer;
-
-                // Enable bloom effect on new player if configured
-                this.engine.enableBloomOnObject?.(newPlayer);
-
-                // Update camera target to follow new player
-                if (this.cameraController) {
-                    this.cameraController.setTarget(newPlayer);
-                }
-
-                console.log('VoxelGame: Player object and camera target updated for character switching');
-            });
-        }
-
-        // Connect DebugController to Game for debug features (F8 animations, etc.)
-        if (this.debugController) {
-            this.debugController.setGame(this);
-        }
-
-        // Apply character modifications now that PlayerController is ready
         this.playerLoader.applyCharacterModifications(this.player!, this.playerController);
 
-        // Connect HUD to PlayerController for dynamic control display
-        this.hud.setPlayerController(this.playerController);
-        // Set HUD reference on PlayerController so it can show controls when movement system changes
-        this.playerController.hud = this.hud;
+        // Register cross-platform actions (Desktop keys + Mobile touch buttons)
+        this.playerController.registerCustomAction({
+            action: 'parry',
+            desktop: { keys: ['KeyQ', 'KeyF'] },
+            mobile: { label: 'PARRY', behavior: 'tap', role: 'primary' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'ward',
+            desktop: { keys: ['KeyE'] },
+            mobile: { label: 'WARD', behavior: 'tap', role: 'primary' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'heal',
+            desktop: { keys: ['KeyR'] },
+            mobile: { label: 'HEAL', behavior: 'tap', role: 'warning' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'execute',
+            desktop: { keys: ['KeyX'] },
+            mobile: { label: 'REND', behavior: 'tap', role: 'danger' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'lockon',
+            desktop: { keys: ['Tab', 'KeyT'] },
+            mobile: { label: 'LOCK', behavior: 'tap', role: 'primary' },
+        });
+
+        this.playerController.registerCustomAction({
+            action: 'pause',
+            desktop: { keys: ['Escape', 'KeyP'] },
+            mobile: { label: 'PAUSE', behavior: 'tap', role: 'primary' },
+        });
     }
 
-    private async loadCustomAnimations(): Promise<void> {
-        try {
-            const animController = this.playerLoader.getAnimationController();
-            if (!animController) {
-                console.warn('No animation controller found');
-                return;
+    private setupInputHandlers(): void {
+        // Direct Mouse & Keyboard Input Bindings for instant responsiveness
+        window.addEventListener('mousedown', (e) => {
+            if (!this.isGamePlaying || this.isPaused || !this.combatSystem || this.uiManager?.isIntroActive()) return;
+            audio.resume();
+
+            if (e.button === 0) {
+                // Left Click -> Light Attack Combo
+                const isSprinting = this.playerController?.keys?.sprint || false;
+                this.combatSystem.handleLightAttackInput(isSprinting);
+            } else if (e.button === 2) {
+                // Right Click -> Charged Heavy Attack
+                this.combatSystem.handleHeavyAttackDown();
+            } else if (e.button === 1) {
+                // Middle Click -> Directional Parry
+                this.combatSystem.handleParryInput();
             }
-            await animController.loadAllAnimationAssets({ normalizeRootMotion: true, loop: false });
-        } catch (error) {
-            console.error('Failed to load custom animations:', error);
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (!this.isGamePlaying || this.isPaused || !this.combatSystem || this.uiManager?.isIntroActive()) return;
+            if (e.button === 2) {
+                this.combatSystem.handleHeavyAttackUp();
+            }
+        });
+
+        window.addEventListener('contextmenu', (e) => {
+            if (this.isGamePlaying) e.preventDefault();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (!this.isGamePlaying || !this.combatSystem || !this.uiManager) return;
+            audio.resume();
+
+            if (e.code === 'Escape' || e.code === 'KeyP') {
+                this.isPaused = !this.isPaused;
+                this.uiManager.togglePause();
+            } else if (e.code === 'Space') {
+                // Dodge Roll with i-frames
+                this.combatSystem.handleDodgeInput();
+            } else if (e.code === 'KeyE') {
+                // Check if near interactable
+                const playerPos = this.player!.position;
+                const item = this.zoneManager?.getClosestInteractable(playerPos);
+                if (item) {
+                    if (item.type === 'prayer_post') {
+                        item.onInteract();
+                        this.uiManager.openCheckpointUpgradeModal();
+                    } else if (item.type === 'elin_altar') {
+                        this.uiManager.openFinalChoiceModal();
+                    } else {
+                        item.onInteract();
+                        item.isConsumed = true;
+                    }
+                } else {
+                    // Fallback to throw ward if no interactable in range
+                    this.combatSystem.handleThrowWard();
+                }
+            } else if (e.code === 'KeyR') {
+                this.combatSystem.handleHealInput();
+            } else if (e.code === 'KeyQ' || e.code === 'KeyF') {
+                this.combatSystem.handleParryInput();
+            } else if (e.code === 'KeyX') {
+                this.combatSystem.handleExecutionInput();
+            } else if (e.code === 'Tab' || e.code === 'KeyT') {
+                e.preventDefault();
+                this.combatSystem.toggleLockOn();
+            }
+        });
+    }
+
+    // =========================================================================
+    // GAMEPLAY STATE TRANSITIONS
+    // =========================================================================
+
+    private handleStartGame(): void {
+        this.isGamePlaying = true;
+        this.isPaused = false;
+        audio.init();
+        audio.setMusicMode('exploration');
+
+        // Sword starts sheathed/on altar until drawn in tutorial
+        const swordMesh = getPlayerSwordMesh();
+        if (swordMesh && !this.stats.swordAcquired) {
+            swordMesh.visible = false;
+        }
+
+        // Teleport to prologue start
+        this.teleportToCheckpoint(this.zoneManager?.checkpoints[0]!.position || new THREE.Vector3(0, 1.0, 4));
+    }
+
+    private handleResumeGame(): void {
+        this.loadSaveFromStorage();
+        this.isGamePlaying = true;
+        this.isPaused = false;
+        audio.init();
+        audio.setMusicMode('exploration');
+        this.uiManager?.currentScreen === 'gameplay';
+
+        const swordMesh = getPlayerSwordMesh();
+        if (swordMesh) swordMesh.visible = this.stats.swordAcquired;
+
+        // Teleport to active checkpoint
+        const cp = this.zoneManager?.checkpoints.find(c => c.id === this.stats.activeCheckpointId);
+        if (cp) {
+            this.teleportToCheckpoint(cp.position);
         }
     }
 
-    public getAnimationController(): any {
-        return this.playerLoader.getAnimationController();
+    private handleRestartCheckpoint(): void {
+        this.isPaused = false;
+        this.stats.currentHealth = this.stats.upgrades.wovenCharm ? this.stats.baseMaxHealth * 1.2 : this.stats.baseMaxHealth;
+        this.stats.healCharges = this.stats.healMaxCharges;
+        this.stats.wardCharges = this.stats.wardMaxCharges;
+        if (this.combatSystem) {
+            this.combatSystem.actionState = 'idle';
+            this.combatSystem.isControlLocked = false;
+        }
+
+        const cp = this.zoneManager?.checkpoints.find(c => c.id === this.stats.activeCheckpointId);
+        if (cp) {
+            this.teleportToCheckpoint(cp.position);
+        }
     }
 
+    private handleQuitToTitle(): void {
+        this.isGamePlaying = false;
+        this.isPaused = false;
+        this.saveCurrentProgress();
+    }
+
+    private handleApplySettings(settings: UISettings): void {
+        if (this.combatSystem) {
+            this.combatSystem.options.goreLevel = settings.gore;
+            this.combatSystem.options.cameraShake = settings.cameraShake;
+        }
+    }
+
+    private handleFinalChoice(choice: 'break_seal' | 'offer_blood'): void {
+        this.isGamePlaying = false;
+        if (choice === 'break_seal') {
+            this.uiManager?.showSubtitle('Elin', 'Sister... the church is falling... we are finally free.', 7000);
+        } else {
+            this.uiManager?.showSubtitle('Liv Ravn', 'Run, Elin. I will keep the bronze silent.', 7000);
+        }
+
+        setTimeout(() => {
+            this.uiManager?.openCredits();
+        }, 5000);
+    }
+
+    private teleportToCheckpoint(pos: THREE.Vector3): void {
+        if (this.playerController) {
+            this.playerController.teleportTo(pos.x, pos.y + 1.0, pos.z);
+        }
+    }
+
+    private saveCurrentProgress(): void {
+        try {
+            localStorage.setItem('rodbra_save_v1', JSON.stringify({
+                stats: this.stats,
+                savedAt: Date.now(),
+            }));
+            const persistence = this.engine.getGamePersistence?.();
+            persistence?.save({ stats: this.stats }, 'default', 'Iron Prayer Post');
+        } catch (_) {}
+    }
+
+    private loadSaveFromStorage(): void {
+        try {
+            const raw = localStorage.getItem('rodbra_save_v1');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.stats) {
+                    this.stats = { ...this.stats, ...parsed.stats };
+                    if (this.combatSystem) this.combatSystem.stats = this.stats;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // =========================================================================
+    // MAIN UPDATE LOOP
+    // =========================================================================
+
     update(deltaTime: number): void {
-        // Process deferred terrain chunks and foliage before gameplay starts.
-        // Ensures all terrain is fully built before the player can see it.
-        // Comment out for games with a tunnel/corridor start where terrain
-        // can build progressively in the background while the player is hidden.
         const vt = this.worldGenerator?.getVoxelTerrainSystem();
         if (vt?.hasDeferredWork) {
             vt.processDeferredWork();
             return;
         }
 
-        // Track elapsed time for animated textures
+        if (this.isPaused) return;
+
         this.elapsedTime += deltaTime;
 
-        if (this.playerController) {
+        // Player controller physics update
+        if (this.playerController && !this.uiManager?.isIntroActive()) {
             this.playerController.update(deltaTime);
         }
 
-        // Update vehicles
-        this.vehicleManager.update();
+        // Falling Snow VFX recentering on player
+        if (this.snowVFX && this.player) {
+            this.player.getWorldPosition(this.snowCenterScratch);
+            this.snowVFX.update(deltaTime, this.snowCenterScratch);
+        }
 
-        // Update block character animation if present
-        this.playerLoader.updateBlockCharacter();
+        // Sword visibility matches acquisition state
+        if (this.stats.swordAcquired) {
+            const swordMesh = getPlayerSwordMesh();
+            if (swordMesh && !swordMesh.visible) swordMesh.visible = true;
+        }
 
-        // Update Bitmagic eye blinking animation
-        updateBitmagicEyeBlink(deltaTime);
+        const isSprinting = this.playerController?.keys?.sprint || false;
+        const keys = this.playerController?.keys;
+        const isMoving = keys ? (keys.forward || keys.backward || keys.left || keys.right) : false;
+        const playerPos = this.player ? this.player.position : new THREE.Vector3();
 
-        // Update voxel terrain animated textures (e.g., lava) and visibility culling
-        if (this.worldGenerator) {
-            const voxelTerrain = this.worldGenerator.getVoxelTerrainSystem();
-            if (voxelTerrain) {
-                voxelTerrain.update(this.elapsedTime);
-
-                // Disable frustum culling during recording — the recording camera has a different
-                // aspect ratio than the editor camera, so the frustum doesn't match and chunks
-                // outside the editor frustum (but inside the recording frustum) get hidden.
-                const isRecording = this.engine.isRecordingFrames?.() ?? false;
-                if (isRecording && !this.wasRecordingFrames) {
-                    this.cullingWasEnabledBeforeRecording = voxelTerrain.isCullingEnabled();
-                    voxelTerrain.setCullingEnabled(false);
-                    const envSys = this.worldGenerator.getEnvironmentObjectSystem();
-                    if (envSys) {
-                        this.envCullingWasEnabledBeforeRecording = envSys.isCullingEnabled();
-                        envSys.setCullingEnabled(false);
+        // Mobile touch controls polling with edge detection
+        if (keys && this.combatSystem && !this.uiManager?.isIntroActive()) {
+            if (keys.ward && !this.prevKeys['ward']) {
+                const item = this.zoneManager?.getClosestInteractable(playerPos);
+                if (item) {
+                    if (item.type === 'prayer_post') {
+                        item.onInteract();
+                        this.uiManager?.openCheckpointUpgradeModal();
+                    } else if (item.type === 'elin_altar') {
+                        this.uiManager?.openFinalChoiceModal();
+                    } else {
+                        item.onInteract();
+                        item.isConsumed = true;
                     }
-                } else if (!isRecording && this.wasRecordingFrames) {
-                    if (this.cullingWasEnabledBeforeRecording) {
-                        voxelTerrain.setCullingEnabled(true);
-                    }
-                    const envSys = this.worldGenerator.getEnvironmentObjectSystem();
-                    if (envSys && this.envCullingWasEnabledBeforeRecording) {
-                        envSys.setCullingEnabled(true);
-                    }
-                }
-                this.wasRecordingFrames = isRecording;
-
-                if (this.engine.camera && !isRecording) {
-                    voxelTerrain.updateVisibility(this.engine.camera, this.player?.position);
-                }
-
-                // Progressive chunk building for large worlds (lazy generation)
-                // Builds 1 chunk per frame as player explores beyond initial radius
-                if (this.player && !voxelTerrain.isLazyGenerationComplete()) {
-                    voxelTerrain.buildPendingChunksNear(
-                        this.player.position.x,
-                        this.player.position.z,
-                        1,  // Build 1 chunk per frame (~8ms overhead)
-                        200 // Only build chunks within 200m of player
-                    );
+                } else {
+                    this.combatSystem.handleThrowWard();
                 }
             }
-
-            // Per-frame LOD selection for baked chunked-VXL worlds (the
-            // voxelize-as-level path). Drop-in alternative to the
-            // chunk-grid `voxelTerrain` block above — only one of the two
-            // systems is non-null per world. Without this call the level
-            // still renders at LOD 0 (default-visible), but distance-based
-            // LOD switching wouldn't happen.
-            const vxlChunked = this.worldGenerator.getVxlChunkedTerrain();
-            if (vxlChunked) {
-                vxlChunked.update(this.elapsedTime);
-                const isRecording = this.engine.isRecordingFrames?.() ?? false;
-                if (this.engine.camera && !isRecording) {
-                    vxlChunked.updateVisibility(this.engine.camera, this.player?.position);
-                }
+            if (keys.heal && !this.prevKeys['heal']) {
+                this.combatSystem.handleHealInput();
+            }
+            if (keys.parry && !this.prevKeys['parry']) {
+                this.combatSystem.handleParryInput();
+            }
+            if (keys.execute && !this.prevKeys['execute']) {
+                this.combatSystem.handleExecutionInput();
+            }
+            if (keys.lockon && !this.prevKeys['lockon']) {
+                this.combatSystem.toggleLockOn();
+            }
+            if (keys.pause && !this.prevKeys['pause']) {
+                this.isPaused = !this.isPaused;
+                this.uiManager?.togglePause();
             }
 
-            // Update foliage debris physics
-            const foliageSystem = this.worldGenerator.getFoliageSystem();
-            if (foliageSystem) {
-                foliageSystem.updateDebris(deltaTime);
+            this.prevKeys['ward'] = !!keys.ward;
+            this.prevKeys['heal'] = !!keys.heal;
+            this.prevKeys['parry'] = !!keys.parry;
+            this.prevKeys['execute'] = !!keys.execute;
+            this.prevKeys['lockon'] = !!keys.lockon;
+            this.prevKeys['pause'] = !!keys.pause;
+        }
+
+        // Update Combat System
+        if (this.combatSystem) {
+            this.combatSystem.update(deltaTime, isSprinting, isMoving);
+
+            // Apply root motion from rolls and attack steps
+            if (this.player && this.combatSystem.rootMotionVelocity.lengthSq() > 0.01) {
+                this.player.position.addScaledVector(this.combatSystem.rootMotionVelocity, deltaTime);
             }
 
-            // Update environment object visibility culling (trees, rocks, buildings)
-            const envSystem = this.worldGenerator.getEnvironmentObjectSystem();
-            if (envSystem && this.engine.camera && !(this.engine.isRecordingFrames?.() ?? false)) {
-                envSystem.updateVisibility(this.engine.camera);
+            // Check if player died
+            if (this.combatSystem.actionState === 'dead' && this.uiManager?.currentScreen === 'gameplay') {
+                this.uiManager.showDeathOverlay();
             }
         }
 
-        // Only sync player physics from body when the movement system doesn't handle it.
-        // Ski and vehicle movement systems sync player position themselves;
-        // running syncPlayerPhysics would overwrite their position causing visual twitching.
+        // Update Enemies & Hitboxes
+        if (this.enemyManager && this.combatSystem) {
+            this.enemyManager.update(
+                deltaTime,
+                playerPos,
+                (damage, hitDir, isGrab) => {
+                    this.combatSystem!.takeDamage(damage, hitDir, isGrab);
+                },
+                (enemy) => {
+                    // Enemy killed
+                    if (enemy.type === 'warden_miniboss') {
+                        this.stats.completedBosses.antlerMiniboss = true;
+                        this.zoneManager?.openHushwoodGate();
+                        this.saveCurrentProgress();
+                    } else if (enemy.type === 'butcher_boss') {
+                        this.stats.completedBosses.millButcherBoss = true;
+                        this.zoneManager?.openMillGate();
+                        this.saveCurrentProgress();
+                    } else if (enemy.type === 'bell_mother') {
+                        this.stats.completedBosses.bellMotherBoss = true;
+                        audio.setMusicMode('ending');
+                    }
+                }
+            );
+        }
+
+        // Update World Zones & Checkpoints
+        if (this.zoneManager) {
+            this.zoneManager.update(deltaTime, playerPos);
+
+            // Contextual Interaction Prompts
+            const closest = this.zoneManager.getClosestInteractable(playerPos);
+            if (closest && this.uiManager) {
+                this.uiManager.showInteractionPrompt(closest.promptText);
+            } else if (this.uiManager) {
+                this.uiManager.hideInteractionPrompt();
+            }
+        }
+
+        // Update HUD display
+        if (this.uiManager && this.isGamePlaying) {
+            const boss = this.enemyManager?.getBossInstance() || null;
+            const obj = this.determineCurrentObjective(playerPos.z);
+            this.uiManager.updateHUD(this.stats, boss, obj);
+        }
+
+        // Sync player visual with physics
         if (!this.playerController?.handlesPlayerPositionSync()) {
             this.syncPlayerPhysics();
         }
 
-        // Let PlayerController handle camera updates (supports vehicle camera switching)
+        // Update camera orbit & recentering
         if (this.playerController && this.playerController.getCameraController) {
             const activeCamera = this.playerController.getCameraController();
             if (activeCamera && activeCamera.update) {
                 activeCamera.update(deltaTime);
             }
         } else if (this.cameraController) {
-            // Fallback to direct camera update
             this.cameraController.update(deltaTime);
         }
+    }
 
+    private determineCurrentObjective(playerZ: number): { title: string; sub: string } {
+        if (!this.stats.swordAcquired) {
+            return { title: 'THE LAST RING', sub: 'Draw the seax blade from the stone altar.' };
+        } else if (playerZ < 45) {
+            return { title: 'AWAKENED DEAD', sub: 'Slay the rising thralls and advance into Hushwood.' };
+        } else if (playerZ < 114) {
+            return { title: 'HUSHWOOD APPROACH', sub: 'Defeat the Antler Chieftain at the stave chapel.' };
+        } else if (playerZ < 195) {
+            return { title: 'THE RED MILL', sub: 'Slay the Butcher of Vargdal to open the crypt gate.' };
+        } else if (!this.stats.completedBosses.bellMotherBoss) {
+            return { title: 'BELOW THE BELL', sub: 'Confront the Bell Mother beneath the cracked bronze bell.' };
+        } else {
+            return { title: 'THE LIVING SEAL', sub: 'Approach Elin at the altar to choose Vargdal\'s fate.' };
+        }
     }
 
     private syncPlayerPhysics(): void {
         const playerBody = this.playerLoader.getPlayerBody();
         if (!playerBody || !this.player) return;
 
-        // Use Rapier translation for position syncing
         const pos = playerBody.translation();
-
-        const capsuleHeight = this.playerLoader.getCapsuleHeight();
-        const halfHeight = capsuleHeight / 2;
-
-        // Position the visual player so its feet align with the physics capsule bottom
-        // Physics capsule center is at pos.y, so capsule bottom is at pos.y - halfHeight
-        // For block characters, there's an offset from playerGroup origin to the actual feet
-        const capsuleBottom = pos.y - halfHeight;
-        const feetOffsetY = this.playerLoader.getFeetOffsetY();
-        const playerGroupY = capsuleBottom - feetOffsetY;
-        this.player.position.set(pos.x, playerGroupY, pos.z);
+        const halfHeight = this.playerLoader.getCapsuleHeight() / 2;
+        this.player.position.set(pos.x, pos.y - halfHeight, pos.z);
 
         if (this.playerController) {
             this.player.rotation.y = this.playerController.rotation;
@@ -532,75 +689,25 @@ export class VoxelGame implements GenreGameInterface {
     }
 
     dispose(): void {
-        if (this.playerController) {
-            this.playerController.dispose();
-        }
-
-        if (this.playerLoader) {
-            this.playerLoader.dispose();
-        }
-
-        if (this.cameraManager) {
-            this.cameraManager.dispose();
-        } else if (this.cameraController) {
-            this.cameraController.dispose();
-        }
-
-        if (this.player && this.engine.scene) {
-            this.engine.scene.remove(this.player);
-        }
-
+        if (this.playerController) this.playerController.dispose();
+        if (this.playerLoader) this.playerLoader.dispose();
+        if (this.cameraManager) this.cameraManager.dispose();
+        else if (this.cameraController) this.cameraController.dispose();
+        if (this.player && this.engine.scene) this.engine.scene.remove(this.player);
+        if (this.snowVFX) this.snowVFX.dispose();
+        if (this.enemyManager) this.enemyManager.clearAll();
+        if (this.combatSystem) this.combatSystem.dispose();
+        if (this.uiManager) this.uiManager.dispose();
+        audio.dispose();
         this.ambientLighting.dispose();
-        if (this.debugController) {
-            this.debugController.dispose();
-        }
         this.hud.dispose();
-
-        const playerBody = this.playerLoader.getPlayerBody();
-        if (playerBody && this.engine.physicsWorld) {
-            this.engine.physicsWorld.removeRigidBody(playerBody);
-        }
-
-        if (this.engine.physicsWorld && this.worldGenerator) {
-            this.worldGenerator.getWorldBodies().forEach(body => {
-                this.engine.physicsWorld!.removeRigidBody(body);
-            });
-        }
     }
 
-    onWindowResize(): void {
-        // Handle window resize if needed
-        // Camera controller doesn't have a resize method, handled automatically by THREE.js
-    }
-
-    getWorldSeed(): number {
-        if (!this.worldGenerator) {
-            throw new Error('WorldGenerator not initialized');
-        }
-        return this.worldGenerator.getSeed();
-    }
-
-    getCurrentPlayer(): any | null {
-        return this.playerController;
-    }
-
-    /**
-     * Get the generic Spawner instance for spawning any type of entity
-     * Use this for ground height detection and positioning of non-vehicle entities
-     */
-    getSpawner(): Spawner {
-        return this.spawner;
-    }
-
-    /**
-     * Get the VehicleSpawner instance for spawning vehicles
-     * This is the recommended way to spawn vehicles - it handles all vehicle-specific logic
-     */
-    getVehicleSpawner(): VehicleSpawner {
-        return this.vehicleSpawner;
-    }
+    onWindowResize(): void {}
+    getWorldSeed(): number { return this.worldGenerator?.getSeed() || 42; }
+    getCurrentPlayer(): any | null { return this.playerController; }
+    getSpawner(): Spawner { return this.spawner; }
+    getVehicleSpawner(): VehicleSpawner { return this.vehicleSpawner; }
 }
 
-// Register the VoxelGame with the genre registry
 genreRegistry.registerGenre('Voxel', VoxelGame);
-

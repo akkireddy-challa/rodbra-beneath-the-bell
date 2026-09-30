@@ -247,9 +247,9 @@ export class WorldZoneManager {
             this.buildSnowyPine(9 + Math.random() * 2, z, matSnowyWood, matRibbon);
         }
 
-        // Burning Bell Tower landmark silhouette in far backdrop
+        // Burning Bell Tower landmark silhouette on the eastern mountain ridge
         const towerGroup = new THREE.Group();
-        towerGroup.position.set(0, 0, 48);
+        towerGroup.position.set(24, 0, 58);
         const towerBody = new THREE.Mesh(new THREE.BoxGeometry(8, 28, 8), matBasalt);
         towerBody.position.set(0, 14, 0);
         towerGroup.add(towerBody);
@@ -262,28 +262,107 @@ export class WorldZoneManager {
         towerGroup.add(belfryLight);
         this.worldGroup.add(towerGroup);
 
+        // Path lanterns & side crags guiding from mountain pass into Hushwood (Z: 38 - 66)
+        this.buildIronTorchBrazier(-3.6, 42);
+        this.buildIronTorchBrazier(3.6, 50);
+        this.buildIronTorchBrazier(-3.6, 58);
+        this.buildIronTorchBrazier(3.6, 64);
+
+        for (let z = 38; z <= 66; z += 7) {
+            this.buildBasaltCrag(-7.5, z, 1.4);
+            this.buildBasaltCrag(7.5, z + 3, 1.5);
+            this.createStaticBoxCollider(new THREE.Vector3(-7.5, 1.5, z), new THREE.Vector3(1.2, 2.0, 1.5));
+            this.createStaticBoxCollider(new THREE.Vector3(7.5, 1.5, z + 3), new THREE.Vector3(1.2, 2.0, 1.5));
+        }
+
         // ---------------------------------------------------------------------
         // ZONE 1: HUSHWOOD APPROACH (Chapel & Pine Forest)
         // ---------------------------------------------------------------------
         this.buildPrayerPost(this.checkpoints[1]!.position, 'checkpoint_hushwood');
 
-        // Ruined Stave Chapel at Z=104
+        // Trail lanterns and boundary pines leading up to the Chapel (Z: 70 - 92)
+        this.buildIronTorchBrazier(-3.6, 74);
+        this.buildIronTorchBrazier(3.6, 82);
+        this.buildIronTorchBrazier(-3.6, 88);
+
+        for (let z = 68; z <= 92; z += 6) {
+            this.buildSnowyPine(-8.0 - Math.random() * 1.5, z, matSnowyWood, matRibbon);
+            this.buildSnowyPine(8.0 + Math.random() * 1.5, z, matSnowyWood, matRibbon);
+        }
+
+        // Ruined Stave Chapel at Z=104: Walkable arena with separate side walls and open arches
         const chapel = new THREE.Group();
         chapel.position.set(0, 0, 104);
-        const chapelWall = new THREE.Mesh(new THREE.BoxGeometry(14, 8, 18), matSnowyWood);
-        chapelWall.position.set(0, 4, 0);
-        chapel.add(chapelWall);
-        const chapelRoof = new THREE.Mesh(new THREE.ConeGeometry(10, 8, 4), matSnowyWood);
-        chapelRoof.position.set(0, 12, 0);
-        chapelRoof.rotation.y = Math.PI / 4;
-        chapel.add(chapelRoof);
-        const chapelArch = new THREE.Mesh(new THREE.BoxGeometry(4, 5, 2), matBasalt);
-        chapelArch.position.set(0, 2.5, -9.1);
-        chapel.add(chapelArch);
-        this.worldGroup.add(chapel);
-        this.createStaticBoxCollider(new THREE.Vector3(0, 4, 104), new THREE.Vector3(7, 4, 9));
 
-        // Hidden Nail Cache near chapel
+        // Left timber wall: X = -6.5, length 20m (Z from -10 to +10 relative to 104), height 6m
+        const leftWall = new THREE.Mesh(new THREE.BoxGeometry(1.2, 6, 20), matSnowyWood);
+        leftWall.position.set(-6.5, 3, 0);
+        chapel.add(leftWall);
+        this.createStaticBoxCollider(new THREE.Vector3(-6.5, 3, 104), new THREE.Vector3(0.6, 3, 10));
+
+        // Right timber wall: X = +6.5, length 20m, height 6m
+        const rightWall = new THREE.Mesh(new THREE.BoxGeometry(1.2, 6, 20), matSnowyWood);
+        rightWall.position.set(6.5, 3, 0);
+        chapel.add(rightWall);
+        this.createStaticBoxCollider(new THREE.Vector3(6.5, 3, 104), new THREE.Vector3(0.6, 3, 10));
+
+        // Entrance Arch at Z = 94.5 (south entrance from forest path)
+        const archLeft = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5.5, 1.4), matBasalt);
+        archLeft.position.set(-3.5, 2.75, -9.5);
+        chapel.add(archLeft);
+        this.createStaticBoxCollider(new THREE.Vector3(-3.5, 2.75, 94.5), new THREE.Vector3(0.7, 2.75, 0.7));
+
+        const archRight = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5.5, 1.4), matBasalt);
+        archRight.position.set(3.5, 2.75, -9.5);
+        chapel.add(archRight);
+        this.createStaticBoxCollider(new THREE.Vector3(3.5, 2.75, 94.5), new THREE.Vector3(0.7, 2.75, 0.7));
+
+        const archLintel = new THREE.Mesh(new THREE.BoxGeometry(8.4, 1.2, 1.4), matBasalt);
+        archLintel.position.set(0, 5.6, -9.5);
+        chapel.add(archLintel);
+
+        // Exit Arch at Z = 113.5 (north exit leading to Hushwood Gate)
+        const exitArchLeft = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5.5, 1.4), matBasalt);
+        exitArchLeft.position.set(-3.5, 2.75, 9.5);
+        chapel.add(exitArchLeft);
+        this.createStaticBoxCollider(new THREE.Vector3(-3.5, 2.75, 113.5), new THREE.Vector3(0.7, 2.75, 0.7));
+
+        const exitArchRight = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5.5, 1.4), matBasalt);
+        exitArchRight.position.set(3.5, 2.75, 9.5);
+        chapel.add(exitArchRight);
+        this.createStaticBoxCollider(new THREE.Vector3(3.5, 2.75, 113.5), new THREE.Vector3(0.7, 2.75, 0.7));
+
+        const exitArchLintel = new THREE.Mesh(new THREE.BoxGeometry(8.4, 1.2, 1.4), matBasalt);
+        exitArchLintel.position.set(0, 5.6, 9.5);
+        chapel.add(exitArchLintel);
+
+        // Overhead broken stave rafters (elevated at Y=6.5, player walks underneath freely)
+        for (let rz = -8; rz <= 8; rz += 4) {
+            const rafter = new THREE.Mesh(new THREE.BoxGeometry(13, 0.4, 0.4), matSnowyWood);
+            rafter.position.set(0, 6.5, rz);
+            chapel.add(rafter);
+        }
+
+        // Interior stone pillars along sides with candle shrines
+        for (let pz = -6; pz <= 6; pz += 6) {
+            const pL = new THREE.Mesh(new THREE.BoxGeometry(0.8, 5, 0.8), matBasalt);
+            pL.position.set(-4.8, 2.5, pz);
+            chapel.add(pL);
+            this.createStaticBoxCollider(new THREE.Vector3(-4.8, 2.5, 104 + pz), new THREE.Vector3(0.4, 2.5, 0.4));
+
+            const pR = new THREE.Mesh(new THREE.BoxGeometry(0.8, 5, 0.8), matBasalt);
+            pR.position.set(4.8, 2.5, pz);
+            chapel.add(pR);
+            this.createStaticBoxCollider(new THREE.Vector3(4.8, 2.5, 104 + pz), new THREE.Vector3(0.4, 2.5, 0.4));
+
+            const candleLight = new THREE.PointLight(0xFFA533, 1.5, 6);
+            candleLight.position.set(-4.8, 2.8, pz);
+            chapel.add(candleLight);
+        }
+
+        this.worldGroup.add(chapel);
+
+        // Hidden Nail Cache near chapel exterior wall
         const nailChest = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.6), matIron);
         nailChest.position.set(-8.5, 0.3, 100);
         this.worldGroup.add(nailChest);
@@ -301,16 +380,39 @@ export class WorldZoneManager {
             }
         });
 
-        // Hushwood Gate shortcut
+        // Hushwood Gate (opens upon defeating Antler Chieftain)
         const hwGate = new THREE.Mesh(new THREE.BoxGeometry(6, 6, 0.6), matIron);
         hwGate.position.set(0, 3, 114);
         this.worldGroup.add(hwGate);
         this.hushwoodGateMesh = hwGate;
         this.hushwoodGateBody = this.createStaticBoxCollider(hwGate.position, new THREE.Vector3(3, 3, 0.3));
 
+        // Side boundary rock walls flanking Hushwood Gate
+        const hwWallL = new THREE.Mesh(new THREE.BoxGeometry(5, 6, 1.0), matBasalt);
+        hwWallL.position.set(-5.5, 3, 114);
+        this.worldGroup.add(hwWallL);
+        this.createStaticBoxCollider(hwWallL.position, new THREE.Vector3(2.5, 3, 0.5));
+
+        const hwWallR = new THREE.Mesh(new THREE.BoxGeometry(5, 6, 1.0), matBasalt);
+        hwWallR.position.set(5.5, 3, 114);
+        this.worldGroup.add(hwWallR);
+        this.createStaticBoxCollider(hwWallR.position, new THREE.Vector3(2.5, 3, 0.5));
+
         // ---------------------------------------------------------------------
         // ZONE 2: THE RED MILL (Sawmill & Frozen River)
         // ---------------------------------------------------------------------
+        // Trail connecting Hushwood Gate to Red Mill (Z: 116 - 140)
+        this.buildIronTorchBrazier(-3.6, 120);
+        this.buildIronTorchBrazier(3.6, 128);
+        this.buildIronTorchBrazier(-3.6, 136);
+
+        for (let z = 116; z <= 138; z += 6) {
+            this.buildBasaltCrag(-7.5, z, 1.3);
+            this.buildBasaltCrag(7.5, z + 3, 1.4);
+            this.createStaticBoxCollider(new THREE.Vector3(-7.5, 1.5, z), new THREE.Vector3(1.2, 2.0, 1.5));
+            this.createStaticBoxCollider(new THREE.Vector3(7.5, 1.5, z + 3), new THREE.Vector3(1.2, 2.0, 1.5));
+        }
+
         this.buildPrayerPost(this.checkpoints[2]!.position, 'checkpoint_redmill');
 
         // Frozen River ice plane
@@ -371,12 +473,23 @@ export class WorldZoneManager {
             this.worldGroup.add(redLight);
         }
 
-        // Mill gate to crypts
+        // Mill gate to crypts at Z=195
         const millGate = new THREE.Mesh(new THREE.BoxGeometry(6, 7, 0.8), matIron);
         millGate.position.set(0, 3.5, 195);
         this.worldGroup.add(millGate);
         this.millGateMesh = millGate;
         this.millGateBody = this.createStaticBoxCollider(millGate.position, new THREE.Vector3(3, 3.5, 0.4));
+
+        // Side boundary stone walls flanking Mill Gate
+        const millWallL = new THREE.Mesh(new THREE.BoxGeometry(6, 7, 1.2), matBasalt);
+        millWallL.position.set(-6, 3.5, 195);
+        this.worldGroup.add(millWallL);
+        this.createStaticBoxCollider(millWallL.position, new THREE.Vector3(3, 3.5, 0.6));
+
+        const millWallR = new THREE.Mesh(new THREE.BoxGeometry(6, 7, 1.2), matBasalt);
+        millWallR.position.set(6, 3.5, 195);
+        this.worldGroup.add(millWallR);
+        this.createStaticBoxCollider(millWallR.position, new THREE.Vector3(3, 3.5, 0.6));
 
         // ---------------------------------------------------------------------
         // ZONE 3: BELOW THE BELL (Subterranean Crypt & Bell Sanctuary)
@@ -467,6 +580,15 @@ export class WorldZoneManager {
                 // Handled by UI Manager
             }
         });
+
+        // Altar torches and Dawn Sanctuary Northern Boundary (Z = 268 - 278)
+        this.buildIronTorchBrazier(-3.2, 268);
+        this.buildIronTorchBrazier(3.2, 268);
+
+        for (let bx = -10; bx <= 10; bx += 3) {
+            this.buildBasaltCrag(bx, 278, 1.8);
+            this.createStaticBoxCollider(new THREE.Vector3(bx, 1.5, 278), new THREE.Vector3(1.6, 2.0, 1.2));
+        }
     }
 
     private buildPrayerPost(pos: THREE.Vector3, id: string): void {

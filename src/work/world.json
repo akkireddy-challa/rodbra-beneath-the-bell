@@ -32,8 +32,8 @@
       "groundBlockType": "ice"
     },
     "disableFoliage": true,
-    "groundWorldSizeX": 64,
-    "groundWorldSizeZ": 64,
+    "groundWorldSizeX": 96,
+    "groundWorldSizeZ": 640,
     "customBlockTypes": [],
     "hud": {
       "startScreen": {

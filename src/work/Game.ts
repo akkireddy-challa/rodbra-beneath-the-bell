@@ -103,9 +103,9 @@ export class VoxelGame implements GenreGameInterface {
         try {
             this.gameId = gameId;
 
-            // Generate baseline world
+            // Generate baseline world (640m length for all 4 connected zones through z=280+)
             if (!this.worldGenerator) {
-                const initialWorldSize = 384; // Extended length for all 4 connected zones
+                const initialWorldSize = 640;
                 const seed = this.worldProfileData.worldSeed!;
                 this.worldGenerator = new WorldGenerator(initialWorldSize, seed, this.worldProfileData, this.engine, gameId, this.gameData);
                 this.engine.findValidVoxelSpawnPosition = (x: number, z: number, fromY?: number) => {
@@ -206,6 +206,13 @@ export class VoxelGame implements GenreGameInterface {
 
             // Register Input Listeners
             this.setupInputHandlers();
+
+            // Run and expose developer route validation
+            if (typeof window !== 'undefined') {
+                (window as any).validateRoute = () => this.validateRoute();
+                (window as any).__RODBRA_VALIDATE_ROUTE__ = () => this.validateRoute();
+            }
+            this.validateRoute();
 
             console.log('✅ RÖDBRÅ: Beneath the Bell loaded successfully');
         } catch (error) {
@@ -735,6 +742,13 @@ export class VoxelGame implements GenreGameInterface {
         const isMoving = keys ? (keys.forward || keys.backward || keys.left || keys.right || (this.playerController ? this.playerController.moveDirection.lengthSq() > 0.01 : false)) : false;
         const playerPos = this.player ? this.player.position : new THREE.Vector3();
 
+        // Kill Plane: if player falls below y = -10, respawn immediately at active checkpoint
+        if (this.player && playerPos.y < -10) {
+            console.warn(`[KillPlane] Player fell below y=-10 (y=${playerPos.y.toFixed(1)}, z=${playerPos.z.toFixed(1)}). Respawning at active checkpoint...`);
+            this.handleRestartCheckpoint();
+            return;
+        }
+
         // Dynamic Sprint Speed: 8.2 m/s sprint, 5.0 m/s run
         if (this.playerController) {
             this.playerController.getMovementSystem()?.setMoveSpeed(isSprinting ? 8.2 : 5.0);
@@ -1013,6 +1027,112 @@ export class VoxelGame implements GenreGameInterface {
             if (i === 9) continue;
             this.prevGamepadButtons[i] = isDown(i);
         }
+    }
+
+    public validateRoute(): {
+        success: boolean;
+        terrainBounds: { sizeX: number; sizeZ: number; halfX: number; halfZ: number; minZ: number; maxZ: number };
+        checkpoints: Array<{
+            id: string;
+            name: string;
+            position: { x: number; y: number; z: number };
+            groundExists: boolean;
+            nextCheckpointReachable: boolean;
+            expectedBoss: string;
+            bossCanSpawn: boolean;
+            exitGateStatus: string;
+        }>;
+    } {
+        const sizeX = this.worldProfileData.groundWorldSizeX ?? 96;
+        const sizeZ = this.worldProfileData.groundWorldSizeZ ?? 640;
+        const halfX = sizeX / 2;
+        const halfZ = sizeZ / 2;
+        const bounds = {
+            sizeX,
+            sizeZ,
+            halfX,
+            halfZ,
+            minZ: -halfZ,
+            maxZ: halfZ,
+        };
+
+        const results = [];
+        const cps = this.zoneManager?.checkpoints || [];
+        const bossMap: Record<string, { bossName: string; gate: string }> = {
+            checkpoint_prologue: { bossName: 'Hollow Thrall (Tutorial)', gate: 'Open Mountain Trail' },
+            checkpoint_hushwood: { bossName: 'Antler Chieftain (Miniboss)', gate: 'Hushwood Gate (Z=114)' },
+            checkpoint_redmill: { bossName: 'The Butcher of Vargdal', gate: 'Mill Gate (Z=195)' },
+            checkpoint_belowthebell: { bossName: 'The Bell Mother (Final Boss)', gate: 'Elin Root Barrier (Z=263)' },
+        };
+
+        console.log('====================================================');
+        console.log('🗺️ RÖDBRÅ: ROUTE & LEVEL VALIDATION REPORT');
+        console.log(`📐 Terrain Dimensions: ${bounds.sizeX}m x ${bounds.sizeZ}m (Bounds: X [${-bounds.halfX}, +${bounds.halfX}], Z [${bounds.minZ}, +${bounds.maxZ}])`);
+        console.log('====================================================');
+
+        let allValid = true;
+
+        for (let i = 0; i < cps.length; i++) {
+            const cp = cps[i]!;
+            const nextCp = cps[i + 1] || null;
+            const bossInfo = bossMap[cp.id] || { bossName: 'Elin Altar', gate: 'Open' };
+
+            // Check ground bounds
+            const inGroundX = Math.abs(cp.position.x) <= bounds.halfX;
+            const inGroundZ = cp.position.z >= bounds.minZ && cp.position.z <= bounds.maxZ;
+            const groundExists = inGroundX && inGroundZ;
+
+            // Reachability to next checkpoint
+            let nextReachable = true;
+            if (nextCp) {
+                const nextInBounds = Math.abs(nextCp.position.x) <= bounds.halfX && nextCp.position.z <= bounds.maxZ;
+                nextReachable = nextInBounds && (nextCp.position.z > cp.position.z);
+            }
+
+            const bossCanSpawn = true;
+            let exitGateStatus = bossInfo.gate;
+            if (cp.id === 'checkpoint_hushwood') {
+                exitGateStatus = this.stats.unlockedShortcuts.hushwoodGate ? 'Open' : 'Gated by Antler Chieftain (Z=114)';
+            } else if (cp.id === 'checkpoint_redmill') {
+                exitGateStatus = this.stats.unlockedShortcuts.millGate ? 'Open' : 'Gated by Mill Butcher (Z=195)';
+            } else if (cp.id === 'checkpoint_belowthebell') {
+                exitGateStatus = this.stats.completedBosses.bellMotherBoss ? 'Open' : 'Gated by Bell Mother (Z=263)';
+            }
+
+            if (!groundExists || !nextReachable) {
+                allValid = false;
+            }
+
+            console.log(`[Checkpoint ${i + 1}/${cps.length}] ${cp.name} (id: ${cp.id}) at (${cp.position.x}, ${cp.position.y}, ${cp.position.z}):`);
+            console.log(`  - Ground under checkpoint: ${groundExists ? '✅ PASS' : '❌ FAIL (Out of terrain bounds!)'}`);
+            console.log(`  - Next checkpoint reachable: ${nextReachable ? '✅ YES' : '❌ NO'}`);
+            console.log(`  - Expected encounter: ${bossInfo.bossName}`);
+            console.log(`  - Exit barrier / gate: ${exitGateStatus}`);
+
+            results.push({
+                id: cp.id,
+                name: cp.name,
+                position: { x: cp.position.x, y: cp.position.y, z: cp.position.z },
+                groundExists,
+                nextCheckpointReachable: nextReachable,
+                expectedBoss: bossInfo.bossName,
+                bossCanSpawn,
+                exitGateStatus,
+            });
+        }
+
+        const elinZ = 268;
+        const elinInBounds = elinZ <= bounds.maxZ;
+        console.log(`[Final Altar] Elin's Altar at Z=${elinZ}:`);
+        console.log(`  - Ground under altar: ${elinInBounds ? '✅ PASS' : '❌ FAIL'}`);
+        console.log(`  - Sanctuary boundary at Z=278: ${278 <= bounds.maxZ ? '✅ PASS (Enclosed within terrain)' : '❌ FAIL'}`);
+        console.log('====================================================');
+
+        return {
+            success: allValid && elinInBounds,
+            terrainBounds: bounds,
+            checkpoints: results,
+        };
     }
 
     dispose(): void {

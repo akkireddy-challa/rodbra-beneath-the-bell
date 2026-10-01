@@ -174,7 +174,8 @@ export class VoxelGame implements GenreGameInterface {
                 this.engine.scene!,
                 this.engine.physicsWorld!,
                 this.enemyManager,
-                this.stats
+                this.stats,
+                this.engine
             );
 
             // Connect Mill timing hazard hit callback

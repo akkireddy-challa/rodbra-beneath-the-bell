@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { audio } from './AudioSystem.js';
+import { loadVxlCharacterTemplate, instantiateVxlCharacter, type VxlCharacterTemplate } from 'engine/loaders/VxlCharacterLoader.js';
 
 export type EnemyType = 'thrall' | 'warden' | 'warden_miniboss' | 'butcher' | 'butcher_boss' | 'bellbound' | 'bell_mother';
 
@@ -14,6 +15,32 @@ export interface EnemyStats {
     attackCooldown: number;
     staggerDuration: number;
     ironNailsDrop: number;
+}
+
+export const ENEMY_VXL_URLS: Record<EnemyType, string> = {
+    thrall: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3460.vxl',
+    warden: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3282.vxl',
+    warden_miniboss: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3282.vxl',
+    butcher: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3808.vxl',
+    butcher_boss: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3808.vxl',
+    bellbound: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3460.vxl',
+    bell_mother: 'https://forged-assets.bitmagic.ai/voxel-characters/vxl/b3587.vxl',
+};
+
+const vxlTemplateCache: Map<string, VxlCharacterTemplate> = new Map();
+
+export async function preloadEnemyVxlTemplates(): Promise<void> {
+    const urls = Object.values(ENEMY_VXL_URLS);
+    for (const url of urls) {
+        if (!vxlTemplateCache.has(url)) {
+            try {
+                const tmpl = await loadVxlCharacterTemplate(url);
+                vxlTemplateCache.set(url, tmpl);
+            } catch {
+                // Non-fatal, falls back to procedural
+            }
+        }
+    }
 }
 
 export const ENEMY_PRESETS: Record<EnemyType, EnemyStats> = {
@@ -264,6 +291,8 @@ export class EnemyInstance {
     public telegraphLight: THREE.PointLight | null = null;
     public armorPlateBroken: boolean = false;
     public armorPlateMesh: THREE.Object3D | null = null;
+    public proceduralGroup: THREE.Group | null = null;
+    public vxlModel: any = null;
 
     // Visual nodes for procedural animation
     private leftLegMesh: THREE.Object3D | null = null;
@@ -293,6 +322,35 @@ export class EnemyInstance {
         this.buildEnemyMesh();
     }
 
+    public async tryAttachVxlModel(): Promise<void> {
+        const url = ENEMY_VXL_URLS[this.type];
+        if (!url) return;
+        try {
+            let tmpl = vxlTemplateCache.get(url);
+            if (!tmpl) {
+                tmpl = await loadVxlCharacterTemplate(url);
+                vxlTemplateCache.set(url, tmpl);
+            }
+            if (this.state === 'dead' || !tmpl) return;
+            const model = instantiateVxlCharacter(tmpl);
+            if (model?.scene) {
+                let scale = 1.0;
+                if (this.type === 'warden_miniboss') scale = 1.35;
+                else if (this.type === 'butcher_boss') scale = 1.4;
+                else if (this.type === 'bell_mother') scale = 1.5;
+                model.scene.scale.set(scale, scale, scale);
+
+                this.vxlModel = model;
+                if (this.proceduralGroup) {
+                    this.proceduralGroup.visible = false;
+                }
+                this.mesh.add(model.scene);
+            }
+        } catch {
+            // Graceful fallback to procedural mesh
+        }
+    }
+
     private buildEnemyMesh(): void {
         const matCorpse = new THREE.MeshStandardMaterial({ color: 0x8C9490, roughness: 0.9, metalness: 0.05 });
         const matClothDark = new THREE.MeshStandardMaterial({ color: 0x2A2725, roughness: 0.95 });
@@ -306,6 +364,7 @@ export class EnemyInstance {
 
         const baseGroup = new THREE.Group();
         this.mesh.add(baseGroup);
+        this.proceduralGroup = baseGroup;
 
         if (this.type === 'thrall') {
             // 1. HOLLOW THRALL: Gaunt, funeral cloth cowl, wrapped rags, crude iron sickle
@@ -765,6 +824,28 @@ export class EnemyInstance {
                 break;
             }
         }
+
+        if (this.vxlModel?.scene) {
+            if (this.state === 'pursue') {
+                this.vxlModel.scene.rotation.z = Math.sin(Date.now() * 0.008 * this.stats.moveSpeed) * 0.08;
+                this.vxlModel.scene.rotation.x = 0;
+            } else if (this.state === 'windup') {
+                const windupProgress = Math.min(1, this.stateTimer / (this.type === 'thrall' ? 0.7 : 0.5));
+                this.vxlModel.scene.rotation.x = 0.18 * windupProgress;
+                this.vxlModel.scene.rotation.z = 0;
+            } else if (this.state === 'attack') {
+                const attackDuration = this.type === 'thrall' ? 0.45 : 0.35;
+                const attackProgress = Math.min(1, this.stateTimer / attackDuration);
+                this.vxlModel.scene.rotation.x = -0.28 * Math.sin(attackProgress * Math.PI);
+                this.vxlModel.scene.rotation.z = 0;
+            } else if (this.state === 'staggered') {
+                this.vxlModel.scene.rotation.x = 0.35;
+                this.vxlModel.scene.rotation.z = 0.1;
+            } else {
+                this.vxlModel.scene.rotation.x = 0;
+                this.vxlModel.scene.rotation.z = 0;
+            }
+        }
     }
 
     private startWindup(): void {
@@ -872,6 +953,10 @@ export class EnemyInstance {
     }
 
     public dispose(): void {
+        if (this.vxlModel?.scene) {
+            this.mesh.remove(this.vxlModel.scene);
+            this.vxlModel = null;
+        }
         if (this.mesh.parent) {
             this.mesh.parent.remove(this.mesh);
         }
@@ -892,6 +977,7 @@ export class EnemyManager {
     public spawnEnemy(type: EnemyType, position: THREE.Vector3, idPrefix: string = 'mob'): EnemyInstance {
         const id = `${idPrefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
         const enemy = new EnemyInstance(type, position, id);
+        enemy.tryAttachVxlModel().catch(() => {});
         this.enemies.push(enemy);
         this.scene.add(enemy.mesh);
         return enemy;

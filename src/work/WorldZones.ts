@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PhysicsBodyFactory } from 'engine/physics/PhysicsBodyFactory.js';
 import type { PhysicsWorld } from 'engine/physics/PhysicsWorld.js';
+import { loadVxlCharacterTemplate, instantiateVxlCharacter } from 'engine/loaders/VxlCharacterLoader.js';
 import { audio } from './AudioSystem.js';
 import { type EnemyManager } from './Enemies.js';
 import { type PlayerStats } from './Constants.js';
@@ -69,17 +70,20 @@ export class WorldZoneManager {
     private spawnedZone1Enemies = false;
     private spawnedZone2Enemies = false;
     private spawnedZone3Enemies = false;
+    private engine: any = null;
 
     constructor(
         scene: THREE.Scene,
         physicsWorld: PhysicsWorld,
         enemyManager: EnemyManager,
-        stats: PlayerStats
+        stats: PlayerStats,
+        engine?: any
     ) {
         this.scene = scene;
         this.physicsWorld = physicsWorld;
         this.enemyManager = enemyManager;
         this.stats = stats;
+        this.engine = engine;
 
         this.worldGroup = new THREE.Group();
         this.worldGroup.name = 'Rödbra_World_Structures';
@@ -208,6 +212,18 @@ export class WorldZoneManager {
         const blade = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.7), new THREE.MeshStandardMaterial({ color: 0xABB2B8, metalness: 0.9 }));
         swordProp.add(blade);
         this.worldGroup.add(swordProp);
+
+        if (this.engine?.spawnAsset) {
+            this.engine.spawnAsset('seax_sword', {
+                position: { x: 0, y: 0.95, z: 16 },
+                rotation: { x: 0, y: Math.PI / 4, z: 0 },
+                parent: swordProp,
+            }).then((spawned: any) => {
+                if (spawned?.object) {
+                    blade.visible = false;
+                }
+            }).catch(() => {});
+        }
 
         this.interactables.push({
             id: 'altar_sword',
@@ -516,6 +532,18 @@ export class WorldZoneManager {
         bellMesh.rotation.x = Math.PI; // Opening faces downward toward arena
         bellGroup.add(bellMesh);
 
+        if (this.engine?.spawnAsset) {
+            this.engine.spawnAsset('colossal_bell', {
+                position: { x: 0, y: 7.0, z: 258 },
+                scale: 1.2,
+                parent: bellGroup,
+            }).then((spawned: any) => {
+                if (spawned?.object) {
+                    bellMesh.visible = false;
+                }
+            }).catch(() => {});
+        }
+
         // Cracked fissure glow inside bell
         const crackLight = new THREE.PointLight(0xB82424, 3.5, 18);
         crackLight.position.set(0, -1.0, 0);
@@ -565,6 +593,18 @@ export class WorldZoneManager {
         const elinHead = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), new THREE.MeshStandardMaterial({ color: 0xE8C5AF }));
         elinHead.position.set(0, 1.7, 0);
         elinGroup.add(elinHead);
+
+        loadVxlCharacterTemplate('https://forged-assets.bitmagic.ai/voxel-characters/vxl/b5391.vxl')
+            .then(tmpl => {
+                const model = instantiateVxlCharacter(tmpl);
+                if (model?.scene) {
+                    model.scene.position.set(0, 0.4, 0);
+                    elinGroup.add(model.scene);
+                    elinBody.visible = false;
+                    elinHead.visible = false;
+                }
+            })
+            .catch(() => {});
 
         this.worldGroup.add(elinGroup);
         this.elinMesh = elinGroup;
@@ -653,6 +693,18 @@ export class WorldZoneManager {
         const holyLight = new THREE.PointLight(0xFFA533, 2.0, 8);
         holyLight.position.set(0, 1.75, 0.3);
         postGroup.add(holyLight);
+
+        if (this.engine?.spawnAsset) {
+            this.engine.spawnAsset('iron_prayer_post', {
+                position: { x: postWorldPos.x, y: postWorldPos.y, z: postWorldPos.z },
+                parent: postGroup,
+            }).then((spawned: any) => {
+                if (spawned?.object) {
+                    upright.visible = false;
+                    base.visible = false;
+                }
+            }).catch(() => {});
+        }
 
         this.worldGroup.add(postGroup);
         this.createStaticBoxCollider(postWorldPos, new THREE.Vector3(0.5, 1.2, 0.5));
